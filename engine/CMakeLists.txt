@@ -4,7 +4,7 @@ project(ABQ-LLM LANGUAGES CXX)
 
 SET(EXECUTABLE_OUTPUT_PATH ${PROJECT_SOURCE_DIR}/bin/${PLATFORM_ABI})
 
-set(CXX_STD "14" CACHE STRING "C++ standard")
+set(CXX_STD "17" CACHE STRING "C++ standard")
 set(CMAKE_CXX_STANDARD "${CXX_STD}")
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 # setting comman compiler flags
@@ -14,7 +14,7 @@ endif ()
 message("CMAKE_BUILD_TYPE: ${CMAKE_BUILD_TYPE}")
 
 set(CMAKE_C_FLAGS    "${CMAKE_C_FLAGS}")
-set(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} -std=c++14")
+set(CMAKE_CXX_FLAGS  "${CMAKE_CXX_FLAGS} -std=c++17")
 set(CMAKE_C_FLAGS_DEBUG    "${CMAKE_C_FLAGS_DEBUG}  -g -O0")
 set(CMAKE_CXX_FLAGS_DEBUG  "${CMAKE_CXX_FLAGS_DEBUG} -g -O0")
 set(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3")
@@ -164,7 +164,7 @@ list(APPEND COMMON_HEADER_DIRS ${CUTLASS_HEADER_DIR})
 list(APPEND COMMON_LIB_DIRS ${CUDA_PATH}/lib/x64)
 
 # Add header files and library dependencies
-include_directories( SYSTEM
+include_directories(
   ${COMMON_HEADER_DIRS}
 )
 link_directories(
@@ -190,6 +190,17 @@ add_library(mma_op STATIC ${MMA_FILES})
 set_property(TARGET mma_op PROPERTY POSITION_INDEPENDENT_CODE  ON)
 set_property(TARGET mma_op PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
 target_link_libraries(mma_op PUBLIC -lcudart)
+
+set(CUTE_FILES "" CACHE INTERNAL "cute files")
+file(GLOB CUTE_FILES ${CUTE_FILES} ./common/*.cu)
+file(GLOB CUTE_FILES ${CUTE_FILES} ./wmma_any/*.cu)
+file(GLOB CUTE_FILES ${CUTE_FILES} ./mma_any/*cute*.cu)
+file(GLOB CUTE_FILES ${CUTE_FILES} ./mma_any/aq_cute_impl/*.cu)
+add_library(cute_op STATIC ${CUTE_FILES})
+
+set_property(TARGET cute_op PROPERTY POSITION_INDEPENDENT_CODE  ON)
+set_property(TARGET cute_op PROPERTY CUDA_RESOLVE_DEVICE_SYMBOLS  ON)
+target_link_libraries(cute_op PUBLIC -lcudart)
 
 file(GLOB TEST_WMMA_FILES ${TEST_WMMA_FILES} ./test/test_wmma/*.cu)
 add_library(test_wmma STATIC ${TEST_WMMA_FILES})
