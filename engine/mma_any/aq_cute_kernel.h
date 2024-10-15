@@ -10,8 +10,8 @@ template <
     typename QuantType,
     // tiling shapes
     typename ThreadBlockShape,
-    // warp shape [m, n, k] for building tiled_mma, e.g. [2, 2, 1] or [1, 2, 1]
-    typename WarpShape,
+    // warp layout [m, n, k] for building tiled_mma, e.g. [2, 2, 1] or [1, 2, 1]
+    typename WarpLayout,
     // mma op shape
     typename MmaShape,
     // threadblock level pipeline stage
@@ -26,7 +26,8 @@ template <
 struct AqCuteKernel {
     using type = cute::uint1_t;
     using acc_type = AccumulatorType;
-
+    
+    static constexpr bool GridMapping = GridMappingXYToMN;
     static constexpr int X_BITS = QuantType::X_BITS; // P bit
     static constexpr int W_BITS = QuantType::W_BITS; // Q bit
     // CTA tile shape
@@ -42,21 +43,21 @@ struct AqCuteKernel {
     static constexpr int MMA_N = MmaShape::N;
     static constexpr int MMA_K = MmaShape::K;
 
-    static constexpr int Warp_M = WarpShape::M;
-    static constexpr int Warp_N = WarpShape::N;
-    static constexpr int Warp_K = WarpShape::K;
+    static constexpr int Warp_M = WarpLayout::M;
+    static constexpr int Warp_N = WarpLayout::N;
+    static constexpr int Warp_K = WarpLayout::K;
 
     static constexpr bool quant_signed = QuantType::SIGNED;
     static_assert(kThreadBlockStage > 1, "kThreadBlockStage must be greater than 1.\n");
 
     // shape check
-    static_assert(Warp_K == 1, "only support warp_k == 1");
+    static_assert(Warp_K == 1, "only support warp layout k == 1");
     static_assert(MainLoop_BLOCK_M % (MMA_N * Warp_M) == 0,
-                  "BLOCK_M must be divisible by mma op m");
+                  "BLOCK_M must be divisible by (mma op m * warp layout m)");
     static_assert(MainLoop_BLOCK_N % (MMA_N * Warp_N) == 0,
-                  "BLOCK_N must be divisible by mma op n");
+                  "BLOCK_N must be divisible by (mma op n * warp layout n)");
     static_assert(MainLoop_BLOCK_K % (MMA_K * Warp_K) == 0,
-                  "BLOCK_K must be divisible by mma op k");
+                  "BLOCK_K must be divisible by (mma op k * warp layout k)");
 
     // --- TiledMMA ---
     using mma_atom = typename AqCuteMmaAtom<MmaShape>::mma_atom;
@@ -65,7 +66,7 @@ struct AqCuteKernel {
     // auto compute warp_tile shape
     using TiledMMA = decltype(make_tiled_mma(
         mma_atom{},
-        make_layout(make_shape(Int<WarpShape::M>{}, Int<WarpShape::N>{}, Int<WarpShape::K>{}))));
+        make_layout(make_shape(Int<WarpLayout::M>{}, Int<WarpLayout::N>{}, Int<WarpLayout::K>{}))));
 
     // nums of thread in thread block
     static constexpr int blockDims = size(TiledMMA{});
@@ -101,9 +102,9 @@ struct AqCuteKernel {
         decltype(make_layout(make_shape(Int<MainLoop_BLOCK_M>{}, Int<MainLoop_BLOCK_N>{}),
                              make_stride(Int<MainLoop_BLOCK_N>{}, _1{})));
 
-    static constexpr size_t outputSmem_size = cosize(SmemCLayout{}) * sizeof(acc_type);
-    // total Smem usage max(A + B, C)
-    static constexpr size_t SmemSize = cute::max(inputSmemSize, outputSmem_size);
+    static constexpr size_t outputSmemSize = cosize(SmemCLayout{}) * sizeof(acc_type);
+    // total Smem usage = max(ASmemSize + BSmemSize, CSmemSize)
+    static constexpr size_t SmemSize = cute::max(inputSmemSize, outputSmemSize);
 
     // --- Copy ---
     using Copy = AqCuteCopy<type, acc_type, ThreadBlockShape, blockDims>;
@@ -133,8 +134,8 @@ template <
     typename QuantType,
     // tiling shapes
     typename ThreadBlockShape,
-    // warp shape [m, n, k] for building tiled_mma, e.g. [2, 2, 1] or [1, 2, 1]
-    typename WarpShape,
+    // warp layout [m, n, k] for building tiled_mma, e.g. [2, 2, 1] or [1, 2, 1]
+    typename WarpLayout,
     // mma op shape
     typename MmaShape,
     // threadblock level pipeline stage
@@ -142,7 +143,7 @@ template <
     // type of accumulator
     typename AccumulatorType, bool GridMappingXYToMN>
 __device__ __forceinline__ void
-AqCuteKernel<QuantType, ThreadBlockShape, WarpShape, MmaShape, kThreadBlockStage, AccumulatorType,
+AqCuteKernel<QuantType, ThreadBlockShape, WarpLayout, MmaShape, kThreadBlockStage, AccumulatorType,
              GridMappingXYToMN>::mainLoop(const int M, const int N, const int K, const int *X,
                                           const int *W, int *shared_mem_workspace)
 {
@@ -268,8 +269,8 @@ template <
     typename QuantType,
     // tiling shapes
     typename ThreadBlockShape,
-    // warp shape [m, n, k] for building tiled_mma, e.g. [2, 2, 1] or [1, 2, 1]
-    typename WarpShape,
+    // warp layout [m, n, k] for building tiled_mma, e.g. [2, 2, 1] or [1, 2, 1]
+    typename WarpLayout,
     // mma op shape
     typename MmaShape,
     // threadblock level pipeline stage
@@ -277,7 +278,7 @@ template <
     // type of accumulator
     typename AccumulatorType, bool GridMappingXYToMN>
 __device__ __forceinline__ void
-    AqCuteKernel<QuantType, ThreadBlockShape, WarpShape, MmaShape, kThreadBlockStage,
+    AqCuteKernel<QuantType, ThreadBlockShape, WarpLayout, MmaShape, kThreadBlockStage,
                  AccumulatorType, GridMappingXYToMN>::(const int M, const int N, const int K,
                                                        const int *X, const int *W,
                                                        int *shared_mem_workspace)
@@ -292,8 +293,8 @@ template <
     typename QuantType,
     // tiling shapes
     typename ThreadBlockShape,
-    // warp shape [m, n, k] for building tiled_mma, e.g. [2, 2, 1] or [1, 2, 1]
-    typename WarpShape,
+    // warp layout [m, n, k] for building tiled_mma, e.g. [2, 2, 1] or [1, 2, 1]
+    typename WarpLayout,
     // mma op shape
     typename MmaShape,
     // threadblock level pipeline stage
@@ -301,7 +302,7 @@ template <
     // type of accumulator
     typename AccumulatorType, bool GridMappingXYToMN>
 __device__ __forceinline__ void
-AqCuteKernel<QuantType, ThreadBlockShape, WarpShape, MmaShape, kThreadBlockStage, AccumulatorType,
+AqCuteKernel<QuantType, ThreadBlockShape, WarpLayout, MmaShape, kThreadBlockStage, AccumulatorType,
              GridMappingXYToMN>::epilogue(const int M, const int N, int *D,
                                           int *shared_mem_workspace, const half *C, bool bias)
 {
