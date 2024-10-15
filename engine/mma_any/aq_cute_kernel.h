@@ -18,7 +18,7 @@ template <
     int kThreadBlockStage,
     // type of accumulator
     typename AccumulatorType, bool GridMappingXYToMN = false
-    // // layout of A, B, C matrix; (MxK rowmajor) * (KxN colmajor) == (MxN rowmajor)
+    // layout of A_tensor, B_tensor, C matrix; (MxK rowmajor) * (KxN colmajor) == (MxN rowmajor)
     // typename LayoutA = Layout::RowMajor,
     // typename LayoutB = Layout::ColumnMajor,
     // typename LayoutC = Layout::RowMajor
@@ -125,3 +125,229 @@ struct AqCuteKernel {
                                              int *shared_mem_workspace, const half *C,
                                              bool bias = false);
 };
+
+// Ampere, Lovelace arch or later
+#if GPU_ARCH >= 80
+template <
+    // Quantization bit width of X and W and signed/unsigned
+    typename QuantType,
+    // tiling shapes
+    typename ThreadBlockShape,
+    // warp shape [m, n, k] for building tiled_mma, e.g. [2, 2, 1] or [1, 2, 1]
+    typename WarpShape,
+    // mma op shape
+    typename MmaShape,
+    // threadblock level pipeline stage
+    int kThreadBlockStage,
+    // type of accumulator
+    typename AccumulatorType, bool GridMappingXYToMN>
+__device__ __forceinline__ void
+AqCuteKernel<QuantType, ThreadBlockShape, WarpShape, MmaShape, kThreadBlockStage, AccumulatorType,
+             GridMappingXYToMN>::mainLoop(const int M, const int N, const int K, const int *X,
+                                          const int *W, int *shared_mem_workspace)
+{
+    int tidx = threadIdx.x;
+    int bidx_m = GridMappingXYToMN ? blockIdx.x : blockIdx.y;
+    int bidx_n = GridMappingXYToMN ? blockIdx.y : blockIdx.x;
+
+    // X*WT = [P * block_m, K] * [Q * block_n, K]T = [P * block_m, Q * block_n]
+    int main_loop_m = M * X_BITS;
+    int main_loop_n = N * W_BITS;
+    int main_loop_k = K;
+    // gmem tensor
+    auto A_tensor = make_tensor(make_gmem_ptr<type>(X), make_shape(main_loop_m, main_loop_k),
+                                make_stride(main_loop_k, _1{}));
+    auto B_tensor = make_tensor(make_gmem_ptr<type>(W), make_shape(main_loop_n, main_loop_k),
+                                make_stride(main_loop_n, _1{}));
+
+    // gmem tile tensor
+    auto gA = local_tile(A_tensor, make_tile(Int<MainLoop_BLOCK_M>{}, Int<MainLoop_BLOCK_K>{}),
+                         make_coord(bidx_m, _)); //[P * block_m, block_k, k_loop]
+    auto gB = local_tile(B_tensor, make_tile(Int<MainLoop_BLOCK_N>{}, Int<MainLoop_BLOCK_K>{}),
+                         make_coord(bidx_n, _)); //[Q * block_n, block_k, k_loop]
+
+    // smem tile tensor
+    type *a_smem_ptr = reinterpret_cast<type *>(shared_mem_workspace);
+    //! a_smem_ptr + (ASmemSize / 8) with alloc SmemSize/8 bytes cause illegal memory access
+    type *b_smem_ptr = a_smem_ptr + ASmemSize;
+
+    auto sA = make_tensor(make_smem_ptr<type>(a_smem_ptr),
+                          SmemALayout{}); // [P * block_m, block_k, stage]
+    auto sB = make_tensor(make_smem_ptr<type>(b_smem_ptr),
+                          SmemBLayout{}); // [Q * block_n, block_k, stage]
+    auto sC = make_tensor(make_smem_ptr<type>(shared_mem_workspace),
+                          SmemCLayout{}); // [P * block_m, Q * block_n]
+
+    // tiled mma
+    TiledMMA mma;
+    auto thr_mma = mma.get_slice(mma);
+    auto tArA_mma = thr_mma.partition_fragment_A(gA(_, _, 0)); // [a_mma_frag_size, mma_m, mma_k]
+    auto tBrB_mma = thr_mma.partition_fragment_B(gB(_, _, 0)); // [b_mma_frag_size, mma_n, mma_k]
+    auto tCrC_mma = thr_mma.partition_fragment_C(sC); // [c_mma_frag_size, mma_m, mma_n]
+    // set acc zero
+    clear(tCrC_mma);
+
+    // g2s load copy
+    G2SCopyA a_g2s_copy;
+    G2SCopyB b_g2s_copy;
+
+    auto a_thr_g2s_copy = a_g2s_copy.get_slice(tidx);
+    auto tAgA_g2s_copy = a_thr_g2s_copy.partition_S(gA); // [copy_size, copy_m, copy_k, k_loop]
+    auto tAsA_g2s_copy = a_thr_g2s_copy.partition_D(sA); // [copy_size, copy_m, copy_k, stage]
+
+    auto b_thr_g2s_copy = b_g2s_copy.get_slice(tidx);
+    auto tBgB_g2s_copy = b_thr_g2s_copy.partition_S(gB); // [copy_size, copy_n, copy_k, k_loop]
+    auto tBsB_g2s_copy = b_thr_g2s_copy.partition_D(sB); // [copy_size, copy_n, copy_k, stage]
+
+    // s2r load copy
+    auto a_s2r_copy = make_tiled_copy_A(S2RCopyAtomA{}, mma);
+    auto a_thr_s2r_copy = a_s2r_copy.get_slice(tidx);
+    auto tAsA_s2r_copy = a_s2r_copy.partition_S(sA); // [copy_size, copy_m, copy_k, stage]
+    auto tArA_s2r_copy = a_s2r_copy.retile_D(tArA_mma); // [copy_size, copy_m, copy_k]
+
+    auto b_s2r_copy = make_tiled_copy_B(S2RCopyAtomB{}, mma);
+    auto b_thr_s2r_copy = b_s2r_copy.get_slice(tidx);
+    auto tBsB_s2r_copy = b_s2r_copy.partition_S(sB); // [copy_size, copy_m, copy_k, stage]
+    auto tBrB_s2r_copy = b_s2r_copy.retile_D(tBrB_mma); // [copy_size, copy_m, copy_k]
+
+    // r2s store copy
+    auto c_r2s_copy = make_tiled_copy_C(R2SCopyAtomC{}, mma);
+    auto c_thr_r2s_copy = c_r2s_copy.get_slice(tidx);
+    auto tCrC_r2s_copy = c_thr_r2s_copy.retile_S(tCrC_mma);
+    auto tCsS_r2s_copy = c_thr_r2s_copy.partition_D(sC);
+
+#if 1 // print for debug
+    if (thread0()) {
+        print("\nmma\n");
+        print(mma);
+        print("\na_g2s_copy\n");
+        print(a_g2s_copy);
+        print("\nb_g2s_copy\n");
+        print(b_g2s_copy);
+        print("\na_s2r_copy\n");
+        print(a_s2r_copy);
+        print("\nb_s2r_copy\n");
+        print(b_s2r_copy);
+        print("\nc_r2s_copy\n");
+        print(c_r2s_copy);
+        print("\ntArA_mma\n");
+        print(tArA_mma);
+        print("\ntBrB_mma\n");
+        print(tBrB_mma);
+        print("\ntCrC_mma\n");
+        print(tCrC_mma);
+        print("\ntAgA_g2s_copy\n");
+        print(tAgA_g2s_copy);
+        print("\ntAsA_g2s_copy\n");
+        print(tAsA_g2s_copy);
+        print("\ntBgB_g2s_copy\n");
+        print(tBgB_g2s_copy);
+        print("\ntBsB_g2s_copy\n");
+        print(tBsB_g2s_copy);
+        print("\ntAsA_s2r_copy\n");
+        print(tAsA_s2r_copy);
+        print("\ntArA_s2r_copy\n");
+        print(tArA_s2r_copy);
+        print("\ntBsB_s2r_copy\n");
+        print(tBsB_s2r_copy);
+        print("\ntBrB_s2r_copy\n");
+        print(tBrB_s2r_copy);
+        print("\ntCrC_r2s_copy\n");
+        print(tCrC_r2s_copy);
+        print("\ntCsS_r2s_copy\n");
+        print(tCsS_r2s_copy);
+    }
+#endif
+    // main loop 
+}
+
+// before Ampere
+#else
+template <
+    // Quantization bit width of X and W and signed/unsigned
+    typename QuantType,
+    // tiling shapes
+    typename ThreadBlockShape,
+    // warp shape [m, n, k] for building tiled_mma, e.g. [2, 2, 1] or [1, 2, 1]
+    typename WarpShape,
+    // mma op shape
+    typename MmaShape,
+    // threadblock level pipeline stage
+    int kThreadBlockStage,
+    // type of accumulator
+    typename AccumulatorType, bool GridMappingXYToMN>
+__device__ __forceinline__ void
+    AqCuteKernel<QuantType, ThreadBlockShape, WarpShape, MmaShape, kThreadBlockStage,
+                 AccumulatorType, GridMappingXYToMN>::(const int M, const int N, const int K,
+                                                       const int *X, const int *W,
+                                                       int *shared_mem_workspace)
+{
+    // no implementation
+}
+
+#endif
+
+template <
+    // Quantization bit width of X and W and signed/unsigned
+    typename QuantType,
+    // tiling shapes
+    typename ThreadBlockShape,
+    // warp shape [m, n, k] for building tiled_mma, e.g. [2, 2, 1] or [1, 2, 1]
+    typename WarpShape,
+    // mma op shape
+    typename MmaShape,
+    // threadblock level pipeline stage
+    int kThreadBlockStage,
+    // type of accumulator
+    typename AccumulatorType, bool GridMappingXYToMN>
+__device__ __forceinline__ void
+AqCuteKernel<QuantType, ThreadBlockShape, WarpShape, MmaShape, kThreadBlockStage, AccumulatorType,
+             GridMappingXYToMN>::epilogue(const int M, const int N, int *D,
+                                          int *shared_mem_workspace, const half *C, bool bias)
+{
+    int tidx = threadIdx.x;
+    int bidx_m = GridMappingXYToMN ? blockIdx.x : blockIdx.y;
+    int bidx_n = GridMappingXYToMN ? blockIdx.y : blockIdx.x;
+
+    auto D_tensor =
+        make_tensor(make_gmem_ptr<acc_type>(D), make_shape(M, N), make_stride(N, _1{})); // [m, n]
+
+    auto gD = local_tile(D_tensor, make_tile(Int<BLOCK_M>{}, Int<BLOCK_N>{}),
+                         make_coord(bidx_m, bidx_n)); //[block_m, block_n]
+
+    auto sC = make_tensor(make_smem_ptr<type>(shared_mem_workspace),
+                          SmemCLayout{}); // [P * block_m, Q * block_n]
+
+    auto sC_tiled = local_tile(sC, make_tile(Int<BLOCK_M>{}, Int<BLOCK_N>{}),
+                               make_coord(_, _)); // [block_m, block_n, P, Q]
+
+    // Epilog s2r copy
+    EpilogS2RCopy c_s2r_copy;
+    auto c_thr_s2r_copy = c_s2r_copy.get_slice(tidx);
+    auto tCsC_s2r_copy = c_thr_s2r_copy.partition_S(sC_tiled(_, _, 0, 0));
+    auto tCrC_s2r_copy = make_tensor_like(tCsC_s2r_copy);
+
+    // Epilog r2g copy
+    EpilogR2GCopy c_r2g_copy;
+    auto c_thr_r2g_copy = c_r2g_copy.get_slice(tidx);
+    auto tCrC_r2g_copy = c_r2g_copy.retiled_S(tCrC_s2r_copy);
+    auto tCgC_r2g_copy = c_r2g_copy.partition_D(gD);
+
+#if 1 // print for debug
+    if (thread0()) {
+        print("\nc_s2r_copy\n");
+        print(c_s2r_copy);
+        print("\nc_r2g_copy\n");
+        print(c_r2g_copy);
+        print("\ntCsC_s2r_copy\n");
+        print(tCsC_s2r_copy);
+        print("\ntCrC_s2r_copy\n");
+        print(tCrC_s2r_copy);
+        print("\ntCrC_r2g_copy\n");
+        print(tCrC_r2g_copy);
+        print("\ntCgC_r2g_copy\n");
+        print(tCgC_r2g_copy);
+    }
+#endif
+    // epilogue 
+}
