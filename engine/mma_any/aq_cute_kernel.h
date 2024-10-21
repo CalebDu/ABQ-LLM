@@ -26,7 +26,7 @@ template <
 struct AqCuteKernel {
     using type = cute::uint1_t;
     using acc_type = AccumulatorType;
-    
+
     static constexpr bool GridMapping = GridMappingXYToMN;
     static constexpr int X_BITS = QuantType::X_BITS; // P bit
     static constexpr int W_BITS = QuantType::W_BITS; // Q bit
@@ -76,10 +76,9 @@ struct AqCuteKernel {
     using SwizzleAtom = SwizzleAtom<MainLoop_BLOCK_M, MainLoop_BLOCK_N, MainLoop_BLOCK_K>;
     using AB_Swizzle = typename SwizzleAtom::AB_Swizzle;
     // SmemLayoutAtom [8, block_k]
-    using SmemABLayoutAtom =
-        decltype(composition(AB_Swizzle{},
-                             make_layout(make_shape(Int<8>{}, Int<MainLoop_BLOCK_K>{}),
-                                         make_stride(Int<MainLoop_BLOCK_K>{}, Int<1>{}))));
+    using SmemABLayoutAtom = decltype(composition(
+        AB_Swizzle{}, make_layout(make_shape(Int<8>{}, Int<MainLoop_BLOCK_K>{}),
+                                  make_stride(Int<MainLoop_BLOCK_K>{}, Int<1>{}))));
 
     // SmemALayout [x_bit * block_m, block_k, stage]
     using SmemALayout = decltype(tile_to_shape(
@@ -90,9 +89,8 @@ struct AqCuteKernel {
         SmemABLayoutAtom{},
         make_shape(Int<MainLoop_BLOCK_N>{}, Int<MainLoop_BLOCK_K>{}, Int<kThreadBlockStage>{})));
 
-    // !question: inputSmemSize / 8 cause illegal memory access!
-    static constexpr size_t ASmemSize = cosize(SmemALayout{});
-    static constexpr size_t BSmemSize = cosize(SmemBLayout{});
+    static constexpr size_t ASmemSize = cosize(SmemALayout{}) / 8; // bit pack
+    static constexpr size_t BSmemSize = cosize(SmemBLayout{}) / 8; // bit pack
     static constexpr size_t inputSmemSize = ASmemSize + BSmemSize;
 
     // todo swizzle SmemCLayout
@@ -159,17 +157,26 @@ AqCuteKernel<QuantType, ThreadBlockShape, WarpLayout, MmaShape, kThreadBlockStag
                                 make_stride(main_loop_k, _1{}));
     auto B_tensor = make_tensor(make_gmem_ptr<type>(W), make_shape(main_loop_n, main_loop_k),
                                 make_stride(main_loop_n, _1{}));
+    // pred tensor for OOB(out of bound) check
+    auto A_pred_tensor = make_identity_tensor(shape(A_tensor));
+    auto B_pred_tensor = make_identity_tensor(shape(B_tensor));
 
     // gmem tile tensor
     auto gA = local_tile(A_tensor, make_tile(Int<MainLoop_BLOCK_M>{}, Int<MainLoop_BLOCK_K>{}),
                          make_coord(bidx_m, _)); //[P * block_m, block_k, k_loop]
     auto gB = local_tile(B_tensor, make_tile(Int<MainLoop_BLOCK_N>{}, Int<MainLoop_BLOCK_K>{}),
                          make_coord(bidx_n, _)); //[Q * block_n, block_k, k_loop]
+    auto gA_pred =
+        local_tile(A_pred_tensor, make_tile(Int<MainLoop_BLOCK_M>{}, Int<MainLoop_BLOCK_K>{}),
+                   make_coord(bidx_m, _)); //[P * block_m, block_k, k_loop]
+    auto gB_pred =
+        local_tile(B_pred_tensor, make_tile(Int<MainLoop_BLOCK_M>{}, Int<MainLoop_BLOCK_K>{}),
+                   make_coord(bidx_m, _)); //[P * block_m, block_k, k_loop]
 
     // smem tile tensor
     type *a_smem_ptr = reinterpret_cast<type *>(shared_mem_workspace);
-    //! a_smem_ptr + (ASmemSize / 8) with alloc SmemSize/8 bytes cause illegal memory access
-    type *b_smem_ptr = a_smem_ptr + ASmemSize;
+
+    type *b_smem_ptr = a_smem_ptr + ASmemSize / 8; // bit pack
 
     auto sA = make_tensor(make_smem_ptr<type>(a_smem_ptr),
                           SmemALayout{}); // [P * block_m, block_k, stage]
@@ -193,10 +200,14 @@ AqCuteKernel<QuantType, ThreadBlockShape, WarpLayout, MmaShape, kThreadBlockStag
 
     auto a_thr_g2s_copy = a_g2s_copy.get_slice(tidx);
     auto tAgA_g2s_copy = a_thr_g2s_copy.partition_S(gA); // [copy_size, copy_m, copy_k, k_loop]
+    auto tAgA_g2s_copy_pred =
+        a_thr_g2s_copy.partition_S(gA_pred); // [copy_size, copy_m, copy_k, k_loop]
     auto tAsA_g2s_copy = a_thr_g2s_copy.partition_D(sA); // [copy_size, copy_m, copy_k, stage]
 
     auto b_thr_g2s_copy = b_g2s_copy.get_slice(tidx);
     auto tBgB_g2s_copy = b_thr_g2s_copy.partition_S(gB); // [copy_size, copy_n, copy_k, k_loop]
+    auto tBgB_g2s_copy_pred =
+        b_thr_g2s_copy.partition_S(gB_pred); // [copy_size, copy_n, copy_k, k_loop]
     auto tBsB_g2s_copy = b_thr_g2s_copy.partition_D(sB); // [copy_size, copy_n, copy_k, stage]
 
     // s2r load copy
@@ -258,7 +269,8 @@ AqCuteKernel<QuantType, ThreadBlockShape, WarpLayout, MmaShape, kThreadBlockStag
         print(tCsS_r2s_copy);
     }
 #endif
-    // main loop 
+    // main loop
+    
 }
 
 // before Ampere
@@ -349,5 +361,5 @@ AqCuteKernel<QuantType, ThreadBlockShape, WarpLayout, MmaShape, kThreadBlockStag
         print(tCgC_r2g_copy);
     }
 #endif
-    // epilogue 
+    // epilogue
 }

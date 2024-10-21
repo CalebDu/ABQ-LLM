@@ -31,7 +31,7 @@ template <> struct AqCuteMmaAtom<ShapeBase<16, 8, 256>> {
 template <typename type, typename acc_type, typename ThreadBlockShape, int kThread>
 struct AqCuteCopy {
     // mainloop G2S load copy async
-    using G2SCopyOp = SM80_CP_ASYNC_CACHEGLOBAL<cute::uint128_t>; // 128 uint1b_t per thread
+    using G2SCopyOp = SM80_CP_ASYNC_CACHEGLOBAL_ZFILL<cute::uint128_t>; // 128 uint1b_t per thread
     using G2SCopyTraits = Copy_Traits<G2SCopyOp>;
     using G2SCopyAtom = Copy_Atom<G2SCopyTraits, type>;
 
@@ -54,7 +54,7 @@ struct AqCuteCopy {
         make_layout(make_shape(_1{}, _128{}))));
 
     // mainloop S2R load copy
-    // load copy 32 uint1b_t(int32_t) fragment per thread
+    // load copy 32 uint1b_t(int32_t) a,b fragment per thread
     using S2RCopyOp = UniversalCopy<int32_t>;
     using S2RCopyTraits = Copy_Traits<S2RCopyOp>;
     using S2RCopyAtom = Copy_Atom<S2RCopyTraits, type>;
@@ -62,7 +62,7 @@ struct AqCuteCopy {
     using S2RCopyAtomB = S2RCopyAtom;
 
     // mainloop R2S store copy
-    // store copy 2 int32_t(int64_t) fragment per thread
+    // store copy 2 int32_t(int64_t) c fragment per thread
     using R2SCopyAtomC = Copy_Atom<UniversalCopy<int64_t>, acc_type>;
 
     // epilogue S2R load copy vectorization
