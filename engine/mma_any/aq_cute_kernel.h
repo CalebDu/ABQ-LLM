@@ -73,12 +73,11 @@ struct AqCuteKernel {
 
     // --- Smem Layout ---
     // AB Swizzle
-    static constexpr int G2S_SwizzleB = 3; // 2^3 = 8
-    static constexpr int G2S_SwizzleM = 7; // 2^7 = 128 uint1b_t = int128_t
-    static constexpr int G2S_SwizzleS = 3; // 2^3 = 8
+    using SwizzleAtom = SwizzleAtom<MainLoop_BLOCK_M, MainLoop_BLOCK_N, MainLoop_BLOCK_K>;
+    using AB_Swizzle = typename SwizzleAtom::AB_Swizzle;
     // SmemLayoutAtom [8, block_k]
     using SmemABLayoutAtom =
-        decltype(composition(Swizzle<G2S_SwizzleB, G2S_SwizzleM, G2S_SwizzleS>{},
+        decltype(composition(AB_Swizzle{},
                              make_layout(make_shape(Int<8>{}, Int<MainLoop_BLOCK_K>{}),
                                          make_stride(Int<MainLoop_BLOCK_K>{}, Int<1>{}))));
 
@@ -176,12 +175,12 @@ AqCuteKernel<QuantType, ThreadBlockShape, WarpLayout, MmaShape, kThreadBlockStag
                           SmemALayout{}); // [P * block_m, block_k, stage]
     auto sB = make_tensor(make_smem_ptr<type>(b_smem_ptr),
                           SmemBLayout{}); // [Q * block_n, block_k, stage]
-    auto sC = make_tensor(make_smem_ptr<type>(shared_mem_workspace),
+    auto sC = make_tensor(make_smem_ptr<acc_type>(shared_mem_workspace),
                           SmemCLayout{}); // [P * block_m, Q * block_n]
 
     // tiled mma
     TiledMMA mma;
-    auto thr_mma = mma.get_slice(mma);
+    auto thr_mma = mma.get_slice(tidx);
     auto tArA_mma = thr_mma.partition_fragment_A(gA(_, _, 0)); // [a_mma_frag_size, mma_m, mma_k]
     auto tBrB_mma = thr_mma.partition_fragment_B(gB(_, _, 0)); // [b_mma_frag_size, mma_n, mma_k]
     auto tCrC_mma = thr_mma.partition_fragment_C(sC); // [c_mma_frag_size, mma_m, mma_n]
@@ -203,13 +202,13 @@ AqCuteKernel<QuantType, ThreadBlockShape, WarpLayout, MmaShape, kThreadBlockStag
     // s2r load copy
     auto a_s2r_copy = make_tiled_copy_A(S2RCopyAtomA{}, mma);
     auto a_thr_s2r_copy = a_s2r_copy.get_slice(tidx);
-    auto tAsA_s2r_copy = a_s2r_copy.partition_S(sA); // [copy_size, copy_m, copy_k, stage]
-    auto tArA_s2r_copy = a_s2r_copy.retile_D(tArA_mma); // [copy_size, copy_m, copy_k]
+    auto tAsA_s2r_copy = a_thr_s2r_copy.partition_S(sA); // [copy_size, copy_m, copy_k, stage]
+    auto tArA_s2r_copy = a_thr_s2r_copy.retile_D(tArA_mma); // [copy_size, copy_m, copy_k]
 
     auto b_s2r_copy = make_tiled_copy_B(S2RCopyAtomB{}, mma);
     auto b_thr_s2r_copy = b_s2r_copy.get_slice(tidx);
-    auto tBsB_s2r_copy = b_s2r_copy.partition_S(sB); // [copy_size, copy_m, copy_k, stage]
-    auto tBrB_s2r_copy = b_s2r_copy.retile_D(tBrB_mma); // [copy_size, copy_m, copy_k]
+    auto tBsB_s2r_copy = b_thr_s2r_copy.partition_S(sB); // [copy_size, copy_m, copy_k, stage]
+    auto tBrB_s2r_copy = b_thr_s2r_copy.retile_D(tBrB_mma); // [copy_size, copy_m, copy_k]
 
     // r2s store copy
     auto c_r2s_copy = make_tiled_copy_C(R2SCopyAtomC{}, mma);
@@ -217,7 +216,7 @@ AqCuteKernel<QuantType, ThreadBlockShape, WarpLayout, MmaShape, kThreadBlockStag
     auto tCrC_r2s_copy = c_thr_r2s_copy.retile_S(tCrC_mma);
     auto tCsS_r2s_copy = c_thr_r2s_copy.partition_D(sC);
 
-#if 1 // print for debug
+#if 0 // print for debug
     if (thread0()) {
         print("\nmma\n");
         print(mma);
@@ -331,10 +330,10 @@ AqCuteKernel<QuantType, ThreadBlockShape, WarpLayout, MmaShape, kThreadBlockStag
     // Epilog r2g copy
     EpilogR2GCopy c_r2g_copy;
     auto c_thr_r2g_copy = c_r2g_copy.get_slice(tidx);
-    auto tCrC_r2g_copy = c_r2g_copy.retiled_S(tCrC_s2r_copy);
-    auto tCgC_r2g_copy = c_r2g_copy.partition_D(gD);
+    auto tCrC_r2g_copy = c_thr_r2g_copy.retile_S(tCrC_s2r_copy);
+    auto tCgC_r2g_copy = c_thr_r2g_copy.partition_D(gD);
 
-#if 1 // print for debug
+#if 0 // print for debug
     if (thread0()) {
         print("\nc_s2r_copy\n");
         print(c_s2r_copy);

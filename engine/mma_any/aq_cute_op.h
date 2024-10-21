@@ -69,7 +69,7 @@ void AqCuteOp<QuantType, ThreadBlockShape, WarpLayout, MmaShape, NStage>::initia
     size_t input_buffer_size_dyn = 0;
     size_t input_buffer_size = input_buffer_size_dyn + KernelImpl::inputSmemSize;
     size_t output_buffer_size_dyn = 0;
-    size_t output_buffer_size = output_buffer_size_dyn + KernelImpl::output_buffer_size_static;
+    size_t output_buffer_size = output_buffer_size_dyn + KernelImpl::outputSmemSize;
     this->state.shared_mem_size = max(input_buffer_size, output_buffer_size);
     // printf("\ninput_buffer_size:%d\n", input_buffer_size);
     // printf("output_buffer_size_dyn:%d\n", output_buffer_size_dyn);
