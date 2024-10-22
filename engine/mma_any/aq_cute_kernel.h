@@ -5,6 +5,33 @@
 #include "aq_cute_atom.h"
 #include <cstdint>
 
+template <class... CopyArgs, class PredTensor, class SrcEngine, class SrcLayout, class DstEngine,
+          class DstLayout, class StripTuple, class ZfillTuple>
+__device__ __forceinline__ static void
+copy_strip_zfill(Copy_Atom<CopyArgs...> const &copy, PredTensor const &pred,
+                 Tensor<SrcEngine, SrcLayout> const &src, Tensor<DstEngine, DstLayout> dst,
+                 StripTuple const &strip_bound, ZfillTuple const &zfill_bound)
+{
+    static_assert(SrcLayout::rank == DstLayout::rank, "dst and src mismatch rank ");
+    constexpr int Rank = SrcLayout::rank;
+    // print_type(Rank);
+    auto src_v = group_modes<1, Rank>(src); // [copy, copy_m * copy_n]
+    auto dst_v = group_modes<1, Rank>(dst); //[copy, copy_m * copy_n]
+    auto pred_v = group_modes<1, Rank>(pred); //[copy, copy_m * copy_n]
+#pragma unroll
+    for (int idx = 0; idx < size<1>(pred_v); idx++) {
+        auto pred_coord = pred_v(_0{}, idx);
+        // strip data OOB block tile
+        if (elem_less(pred_coord, strip_bound)) {
+            // fill zeros OOB global shape into block tile
+            copy_if(
+                copy,
+                [&](auto... coords) { return elem_less(pred_v(_0{}, coords...), zfill_bound); },
+                src_v(_, _), dst_v(_, _));
+        }
+    }
+}
+
 template <
     // Quantization bit width of X and W and signed/unsigned
     typename QuantType,
@@ -47,6 +74,7 @@ struct AqCuteKernel {
     static constexpr int Warp_N = WarpLayout::N;
     static constexpr int Warp_K = WarpLayout::K;
 
+    static constexpr int kStage = kThreadBlockStage;
     static constexpr bool quant_signed = QuantType::SIGNED;
     static_assert(kThreadBlockStage > 1, "kThreadBlockStage must be greater than 1.\n");
 
@@ -270,7 +298,104 @@ AqCuteKernel<QuantType, ThreadBlockShape, WarpLayout, MmaShape, kThreadBlockStag
     }
 #endif
     // main loop
-    
+    const int k_main_loop_cnt = size<2>(gA);
+    const int k_inner_loop_cnt = size<2>(tArA_mma);
+    int g2s_s_write_cnt = 0;
+    int g2s_g_read_cnt = 0;
+    int s2r_r_read_cnt = 0;
+
+    int m_tile_bound = (bidx_m + 1) * MainLoop_BLOCK_M;
+    int n_tile_bound = (bidx_n + 1) * MainLoop_BLOCK_N;
+    // g2s pipeline
+#pragma unroll
+    for (int i_stage = 0; i_stage < kStage - 1; i_stage++) {
+        auto a_tile_bound = make_tuple(m_tile_bound, (i_stage + 1) * MainLoop_BLOCK_K);
+        auto b_tile_bound = make_tuple(n_tile_bound, (i_stage + 1) * MainLoop_BLOCK_K);
+
+        copy_strip_zfill(a_g2s_copy, tAgA_g2s_copy_pred(_, _, _, i_stage),
+                         tAgA_g2s_copy(_, _, _, i_stage), tAsA_g2s_copy(_, _, _, i_stage),
+                         a_tile_bound, shape(A_tensor));
+        copy_strip_zfill(b_g2s_copy, tBgB_g2s_copy_pred(_, _, _, i_stage),
+                         tBgB_g2s_copy(_, _, _, i_stage), tBsB_g2s_copy(_, _, _, i_stage),
+                         b_tile_bound, shape(B_tensor));
+        // #pragma unroll
+        //         for (int mk_idx = 0; mk_idx < size<1>(group_modes<1, 3>(tAgA_g2s_copy_pred)); mk_idx++) {
+        //             auto pred = tAgA_g2s_copy_pred(_0{}, _, _, i_stage);
+        //             auto mk_coord = pred(mk_idx);
+        //             // strip data OOB block tile
+        //             if (elem_less(mk_coord, a_tile_bound)) {
+        //                 // fill zeros block tile OOB global shape
+        //                 copy_if(
+        //                     a_g2s_copy,
+        //                     [&](auto... coords) { return elem_less(pred(coords...), shape(A_tensor)); },
+        //                     tAgA_g2s_copy(_, _, _, i_stage), tAsA_g2s_copy(_, _, _, i_stage));
+        //             }
+        //         }
+        // #pragma unroll
+        //         for (int nk_idx = 0; nk_idx < size<1>(group_modes<1, 3>(tBgB_g2s_copy_pred)); nk_idx++) {
+        //             auto pred = tBgB_g2s_copy_pred(_0{}, _, _, i_stage);
+        //             auto nk_coord = pred(nk_idx);
+        //             // strip data OOB block tile
+        //             if (elem_less(nk_coord, b_tile_bound)) {
+        //                 // fill zeros block tile OOB global shape
+        //                 copy_if(
+        //                     b_g2s_copy,
+        //                     [&](auto... coords) { return elem_less(pred(coords...), shape(B_tensor)); },
+        //                     tBgB_g2s_copy(_, _, _, i_stage), tBsB_g2s_copy(_, _, _, i_stage));
+        //             }
+        //         }
+        cp_async_fence();
+        g2s_g_read_cnt++;
+        g2s_s_write_cnt++;
+    }
+    // wait first cp_async commit
+    cp_async_wait<kStage - 2>();
+    __syncthreads();
+
+    // load first s2r
+    copy(a_s2r_copy, tAsA_s2r_copy(_, _, 0, s2r_r_read_cnt), tArA_s2r_copy(_, _, 0));
+    copy(b_s2r_copy, tBsB_s2r_copy(_, _, 0, s2r_r_read_cnt), tBrB_s2r_copy(_, _, 0));
+
+#pragma unroll
+    for (int k_main_loop_idx = 0; k_main_loop_idx < k_main_loop_cnt; k_main_loop_idx++) {
+#pragma unroll
+        for (int k_inner_loop_idx = 0; k_inner_loop_idx < k_inner_loop_cnt; k_inner_loop_idx++) {
+            int next_k_inner_loop_idx = (k_inner_loop_idx + 1) % k_inner_loop_cnt;
+            // wait next stage commit
+            if (k_inner_loop_idx == k_inner_loop_cnt - 1) {
+                cp_async_wait<kStage - 2>();
+                s2r_r_read_cnt = (s2r_r_read_cnt + 1) % kStage;
+            }
+            // s2r pipeline
+            copy(a_s2r_copy, tAsA_s2r_copy(_, _, next_k_inner_loop_idx, s2r_r_read_cnt),
+                 tArA_s2r_copy(_, _, next_k_inner_loop_idx));
+            copy(b_s2r_copy, tBsB_s2r_copy(_, _, next_k_inner_loop_idx, s2r_r_read_cnt),
+                 tBrB_s2r_copy(_, _, next_k_inner_loop_idx));
+            // load stage
+            if (k_inner_loop_idx == 0) {
+                if (g2s_g_read_cnt < k_main_loop_cnt) {
+                    auto a_tile_bound =
+                        make_tuple(m_tile_bound, (g2s_g_read_cnt + 1) * MainLoop_BLOCK_K);
+                    auto b_tile_bound =
+                        make_tuple(n_tile_bound, (g2s_g_read_cnt + 1) * MainLoop_BLOCK_K);
+                    copy_strip_zfill(a_g2s_copy, tAgA_g2s_copy_pred(_, _, _, g2s_g_read_cnt),
+                                     tAgA_g2s_copy(_, _, _, g2s_g_read_cnt),
+                                     tAsA_g2s_copy(_, _, _, g2s_s_write_cnt), a_tile_bound,
+                                     shape(A_tensor));
+                    copy_strip_zfill(b_g2s_copy, tBgB_g2s_copy_pred(_, _, _, g2s_g_read_cnt),
+                                     tBgB_g2s_copy(_, _, _, g2s_g_read_cnt),
+                                     tBsB_g2s_copy(_, _, _, g2s_s_write_cnt), b_tile_bound,
+                                     shape(B_tensor));
+                    g2s_g_read_cnt++;
+                    g2s_s_write_cnt = (g2s_s_write_cnt + 1) % kStage;
+                }
+                cp_async_fence();
+            }
+            // gemm
+            gemm(mma, tArA_mma(_, _, k_inner_loop_idx), tBrB_mma(_, _, k_inner_loop_idx), tCrC_mma);
+        }
+    }
+    copy(c_r2s_copy, tCrC_r2s_copy, tCsS_r2s_copy);
 }
 
 // before Ampere
