@@ -448,27 +448,40 @@ AqCuteKernel<QuantType, ThreadBlockShape, WarpLayout, MmaShape, kThreadBlockStag
 
     auto D_tensor =
         make_tensor(make_gmem_ptr<acc_type>(D), make_shape(M, N), make_stride(N, _1{})); // [m, n]
+    auto D_pred_tensor = make_identity_tensor(shape(D_tensor));
 
     auto gD = local_tile(D_tensor, make_tile(Int<BLOCK_M>{}, Int<BLOCK_N>{}),
                          make_coord(bidx_m, bidx_n)); //[block_m, block_n]
 
-    auto sC = make_tensor(make_smem_ptr<type>(shared_mem_workspace),
+    auto gD_pred = local_tile(D_pred_tensor, make_tile(Int<BLOCK_M>{}, Int<BLOCK_N>{}),
+                              make_coord(bidx_m, bidx_n)); //[block_m, block_n]
+
+    auto sC = make_tensor(make_smem_ptr<acc_type>(shared_mem_workspace),
                           SmemCLayout{}); // [P * block_m, Q * block_n]
+    auto sC_pred = make_identity_tensor(shape(sC));
 
     auto sC_tiled = local_tile(sC, make_tile(Int<BLOCK_M>{}, Int<BLOCK_N>{}),
                                make_coord(_, _)); // [block_m, block_n, P, Q]
 
+    auto sC_tiled_pred = local_tile(sC_pred, make_tile(Int<BLOCK_M>{}, Int<BLOCK_N>{}),
+                                    make_coord(_, _)); // [block_m, block_n, P, Q]
+
     // Epilog s2r copy
     EpilogS2RCopy c_s2r_copy;
     auto c_thr_s2r_copy = c_s2r_copy.get_slice(tidx);
-    auto tCsC_s2r_copy = c_thr_s2r_copy.partition_S(sC_tiled(_, _, 0, 0));
-    auto tCrC_s2r_copy = make_tensor_like(tCsC_s2r_copy);
+    auto tCsC_s2r_copy = c_thr_s2r_copy.partition_S(sC_tiled); // [copy_size, copy_m, copy_n, P, Q]
+    auto tCsC_s2r_copy_pred =
+        c_thr_s2r_copy.partition_S(sC_tiled_pred); // [copy_size, copy_m, copy_n, P, Q]
+    auto tCrC_s2r_copy =
+        make_tensor_like(tCsC_s2r_copy(_, _, _, 0, 0)); // [copy_size, copy_m, copy_n]
+    auto tCrC_reduce = make_tensor_like(tCrC_s2r_copy);
 
     // Epilog r2g copy
     EpilogR2GCopy c_r2g_copy;
     auto c_thr_r2g_copy = c_r2g_copy.get_slice(tidx);
-    auto tCrC_r2g_copy = c_thr_r2g_copy.retile_S(tCrC_s2r_copy);
+    auto tCrC_r2g_copy = c_thr_r2g_copy.retile_S(tCrC_reduce);
     auto tCgC_r2g_copy = c_thr_r2g_copy.partition_D(gD);
+    auto tCgC_r2g_copy_pred = c_thr_r2g_copy.partition_D(gD_pred);
 
 #if 0 // print for debug
     if (thread0()) {
@@ -487,4 +500,31 @@ AqCuteKernel<QuantType, ThreadBlockShape, WarpLayout, MmaShape, kThreadBlockStag
     }
 #endif
     // epilogue
+
+    // thread is valid that pred in [block_m, block_n] range
+    if (elem_less(tCsC_s2r_copy_pred(0), make_tuple(Int<BLOCK_M>{}, Int<BLOCK_N>{}))) {
+        acc_type multiplier = 1;
+#pragma unroll
+        for (int x_bit_idx = 0; x_bit_idx < X_BITS; x_bit_idx++) {
+            acc_type cur_multiplier =
+                (quant_signed && (x_bit_idx == X_BITS - 1)) ? -1 * multiplier : multiplier;
+#pragma unroll
+            for (int w_bit_idx = 0; w_bit_idx < W_BITS; w_bit_idx++) {
+                copy(c_s2r_copy, tCsC_s2r_copy(_, _, _, x_bit_idx, w_bit_idx), tCrC_s2r_copy);
+#pragma unroll
+                for (int i = 0; i < size(tCrC_s2r_copy); i++) {
+                    tCrC_reduce(i) += cur_multiplier * tCrC_s2r_copy(i);
+                }
+                cur_multiplier = (quant_signed && (w_bit_idx == W_BITS - 2)) ? -2 * cur_multiplier :
+                                                                               2 * cur_multiplier;
+            }
+            multiplier >>= 1;
+        }
+        //r2g store
+        // copy(c_r2g_copy, tCrC_r2g_copy, tCgC_r2g_copy);
+        copy_if(
+            c_r2g_copy,
+            [&](auto... coords) { return elem_less(gD_pred(coords...), shape(D_tensor)); },
+            tCrC_r2g_copy, tCgC_r2g_copy);
+    }
 }
