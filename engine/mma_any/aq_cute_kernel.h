@@ -276,7 +276,7 @@ AqCuteKernel<QuantType, ThreadBlockShape, WarpLayout, MmaShape, kThreadBlockStag
     auto tCsS_r2s_copy = c_thr_r2s_copy.partition_D(sC);
 
 #if 0 // print for debug
-    if (thread0()) {
+    if (thread(tid)) {
         print("\nmma\n");
         print(mma);
         print("\na_g2s_copy\n");
@@ -293,6 +293,10 @@ AqCuteKernel<QuantType, ThreadBlockShape, WarpLayout, MmaShape, kThreadBlockStag
         print(gA);
         print("\ngB\n");
         print(gB);
+        print("\nsA\n");
+        print(sA);
+        print("\nsB\n");
+        print(sB);
         print("\ngA_pred\n");
         print(gA_pred);
         print("\ngB_pred\n");

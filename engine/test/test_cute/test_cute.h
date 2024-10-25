@@ -25,13 +25,15 @@
             h_ref_out, false, SIGNED, exec_dur, pack_dur, stream, warmup, repeat);                 \
         if (ret == 0 && gflop_count / exec_dur > max_gflop) {                                      \
             max_gflop = gflop_count / exec_dur;                                                    \
+            max_bw = gbyte_count / (exec_dur * 1e-3);                                              \
             best_config.str("");                                                                   \
             best_config << BM << ", " << BN << ", " << BK << ", " << WM << ", " << WN << ", "      \
                         << WK << ", " << MMA_M << ", " << MMA_N << ", " << MMA_K << ", "           \
                         << NSTAGE;                                                                 \
         }                                                                                          \
-        printf("packing %f (us) exec %f (us) %f TOPS | %f B-TOPS | %s\n", pack_dur * 1e3,          \
-               exec_dur * 1e3, gflop_count / exec_dur, true_gflop_count / exec_dur,                \
+        printf("packing %f (us) exec %f (us)| %f GBPS | %f TOPS | %f B-TOPS | %s\n",               \
+               pack_dur * 1e3, exec_dur * 1e3, gbyte_count / (exec_dur * 1e-3),                    \
+               gflop_count / exec_dur, true_gflop_count / exec_dur,                                \
                ret == 0  ? "PASSED" :                                                              \
                ret == -1 ? "ERROR" :                                                               \
                            "FAILED");                                                              \
@@ -97,13 +99,14 @@ inline int benchmark(InitFuncType init_fn, ExecFuncType exec_fn, int X_BITS, int
         std::cerr << "return due to previous error. ";
         return -1;
     }
-    w_pack_func();
-    x_pack_func();
-    cudaDeviceSynchronize();
-    if (cudaGetLastError() != cudaSuccess) {
-        std::cerr << "return due to previous error. ";
-        return -1;
-    }
+    // w_pack_func();
+    // x_pack_func();
+    // cudaDeviceSynchronize();
+    // if (cudaGetLastError() != cudaSuccess) {
+    //     std::cerr << "return due to previous error. ";
+    //     return -1;
+    // }
+
     // {
     //     /*for debug mainloop*/
     //     using namespace cute;
@@ -195,7 +198,7 @@ inline int benchmark(InitFuncType init_fn, ExecFuncType exec_fn, int X_BITS, int
         return -1;
     }
     pack_dur = packing_timer.elapsed_msecs() / repeat;
-
+    cudaDeviceSynchronize();
     // accuracy comparison
     cudaMemcpy(H_OUT, D, M * N * sizeof(int), cudaMemcpyDeviceToHost);
     if (!check(H_REF_OUT, H_OUT, M, N)) {

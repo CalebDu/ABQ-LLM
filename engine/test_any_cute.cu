@@ -72,7 +72,7 @@ void compute_ref(int *w, int *x, int *ref_c, int M, int N, int K, int W_BIT, int
 int main(int argc, char **argv)
 {
     if (argc < 7) {
-        printf("Usage: ./test_any_cute M N K X_BITS W_BITS SIGNED\n");
+        printf("argc:%d, Usage: ./test_any_cute M N K X_BITS W_BITS SIGNED warmup repeat\n", argc);
         return -1;
     }
     srand(100);
@@ -86,9 +86,14 @@ int main(int argc, char **argv)
         printf("Error, k must >= 128 and k % 128 == 0!");
         return -1;
     }
-    int repeat = 1;
-    int warmup = 0;
-
+    int repeat = 1000;
+    int warmup = 10;
+    if (argc > 7) {
+        repeat = atoi(argv[7]);
+    }
+    if (argc > 8) {
+        warmup = atoi(argv[8]);
+    }
     cudaStream_t stream;
     cudaStreamCreate(&stream);
 
@@ -142,7 +147,7 @@ int main(int argc, char **argv)
     cudaMemcpy(h_w_pack, d_w_pack, w_bits * n * (k / 32) * sizeof(int), cudaMemcpyDeviceToHost);
 
     compute_ref(h_w_pack, h_x_pack, h_ref_out, m, n, k, w_bits, x_bits, quant_sign);
-    
+
     switch (x_bits) {
     case 2:
         switch (w_bits) {

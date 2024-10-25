@@ -13,7 +13,8 @@ void test_cute_w2a2(int x_bits, int w_bits, int *d_x, int *d_w, int *d_x_pack, i
 #ifdef W2A2
     std::string config_str;
     std::stringstream s;
-    s << x_bits << " " << w_bits << " " << m << " " << n << " " << k << " ";
+    s << "X_BITS:" << x_bits << " W_BITS:" << w_bits << " M:" << m << " N:" << n << " K:" << k
+      << " ";
     if (quant_sign) {
         s << "sign ";
     } else {
@@ -25,17 +26,44 @@ void test_cute_w2a2(int x_bits, int w_bits, int *d_x, int *d_w, int *d_x_pack, i
     float true_gflop_count = (float)m / 1e9 * n * k * 2 * x_bits * w_bits;
     float gflop_count = (float)m / 1e9 * n * k * 2;
     float max_gflop = 0;
+    float gbyte_count =
+        float((x_bits * m * k + x_bits * n * k) / 8 + (m * k * sizeof(int32_t))) / 1e9;
+    float max_bw = 0;
     std::stringstream best_config;
 
     if (quant_sign) {
         // W2A2 int
         // cta<8,32,128>  warp layout<1,2,1> mma<8,8,128> stage2
         TEST(2, 2, true, 8, 32, 128, 1, 2, 1, 8, 8, 128, 2);
+        // cta<8,32,128>  warp layout<1,2,1> mma<8,8,128> stage3
+        TEST(2, 2, true, 8, 32, 128, 1, 2, 1, 8, 8, 128, 3);
+        // cta<8,32,128>  warp layout<1,2,1> mma<8,8,128> stage4
+        TEST(2, 2, true, 8, 32, 128, 1, 2, 1, 8, 8, 128, 4);
+        // cta<8,32,128>  warp layout<1,2,1> mma<8,8,128> stage5
+        TEST(2, 2, true, 8, 32, 128, 1, 2, 1, 8, 8, 128, 5);
 
+        // cta<4,32,128>  warp layout<1,2,1> mma<8,8,128> stage2
+        TEST(2, 2, true, 4, 32, 128, 1, 2, 1, 8, 8, 128, 2);
+        // cta<4,32,128>  warp layout<1,2,1> mma<8,8,128> stage3
+        TEST(2, 2, true, 4, 32, 128, 1, 2, 1, 8, 8, 128, 3);
+        // cta<4,32,128>  warp layout<1,2,1> mma<8,8,128> stage4
+        TEST(2, 2, true, 4, 32, 128, 1, 2, 1, 8, 8, 128, 4);
+        // cta<4,32,128>  warp layout<1,2,1> mma<8,8,128> stage5
+        TEST(2, 2, true, 4, 32, 128, 1, 2, 1, 8, 8, 128, 5);
+
+        // cta<4,64,128>  warp layout<1,2,1> mma<8,8,128> stage2
+        TEST(2, 2, true, 4, 64, 128, 1, 2, 1, 8, 8, 128, 2);
+        // cta<4,64,128>  warp layout<1,2,1> mma<8,8,128> stage3
+        TEST(2, 2, true, 4, 64, 128, 1, 2, 1, 8, 8, 128, 3);
+        // cta<4,64,128>  warp layout<1,2,1> mma<8,8,128> stage4
+        TEST(2, 2, true, 4, 64, 128, 1, 2, 1, 8, 8, 128, 4);
+        // cta<4,64,128>  warp layout<1,2,1> mma<8,8,128> stage5
+        TEST(2, 2, true, 4, 64, 128, 1, 2, 1, 8, 8, 128, 5);
     } else {
     }
 
-    printf("The best kernel config is %s with %f TOPS\n", best_config.str().c_str(), max_gflop);
+    printf("The best kernel config is %s with %f TOPS, BW %f GBPS\n", best_config.str().c_str(),
+           max_gflop, max_bw);
 #else
     printf("unsupport w%da%d\n", w_bits, x_bits);
 #endif
