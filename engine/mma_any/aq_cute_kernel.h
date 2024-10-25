@@ -4,7 +4,7 @@
 #include "common/memory.h"
 #include "aq_cute_atom.h"
 #include <cstdint>
-
+#define tid 24 // thread for debug
 template <class... CopyArgs, class PredTensor, class SrcEngine, class SrcLayout, class DstEngine,
           class DstLayout, class StripTuple, class ZfillTuple>
 __device__ __forceinline__ static void
@@ -16,11 +16,19 @@ copy_strip_zfill(Copy_Atom<CopyArgs...> const &copy, PredTensor const &pred,
     constexpr int Rank = SrcLayout::rank;
     // print_type(Rank);
     auto src_v = group_modes<1, Rank>(src); // [copy, copy_m * copy_n]
-    auto dst_v = group_modes<1, Rank>(dst); //[copy, copy_m * copy_n]
-    auto pred_v = group_modes<1, Rank>(pred); //[copy, copy_m * copy_n]
+    auto dst_v = group_modes<1, Rank>(dst); // [copy, copy_m * copy_n]
+    auto pred_v = group_modes<1, Rank>(pred); // [copy, copy_m * copy_n]
 #pragma unroll
     for (int idx = 0; idx < size<1>(pred_v); idx++) {
         auto pred_coord = pred_v(_0{}, idx);
+        // if (thread(tid)) {
+        //     print("\npred\n");
+        //     print(pred_coord);
+        //     print("\nstrip_bound\n");
+        //     print(strip_bound);
+        //     print("\nstrip check\n");
+        //     print(elem_less(pred_coord, strip_bound));
+        // }
         // strip data OOB block tile
         if (elem_less(pred_coord, strip_bound)) {
             // fill zeros OOB global shape into block tile
@@ -177,34 +185,46 @@ AqCuteKernel<QuantType, ThreadBlockShape, WarpLayout, MmaShape, kThreadBlockStag
     int bidx_n = GridMappingXYToMN ? blockIdx.y : blockIdx.x;
 
     // X*WT = [P * block_m, K] * [Q * block_n, K]T = [P * block_m, Q * block_n]
-    int main_loop_m = M * X_BITS;
-    int main_loop_n = N * W_BITS;
+    // int main_loop_m = M * X_BITS;
+    // int main_loop_n = N * W_BITS;
     int main_loop_k = K;
     // gmem tensor
-    auto A_tensor = make_tensor(make_gmem_ptr<type>(X), make_shape(main_loop_m, main_loop_k),
-                                make_stride(main_loop_k, _1{}));
-    auto B_tensor = make_tensor(make_gmem_ptr<type>(W), make_shape(main_loop_n, main_loop_k),
-                                make_stride(main_loop_n, _1{}));
+    // auto A_tensor = make_tensor(make_gmem_ptr<type>(X), make_shape(main_loop_m, main_loop_k),
+    //                             make_stride(main_loop_k, _1{}));
+    // auto B_tensor = make_tensor(make_gmem_ptr<type>(W), make_shape(main_loop_n, main_loop_k),
+    //                             make_stride(main_loop_k, _1{}));
+    auto A_tensor =
+        make_tensor(make_gmem_ptr<type>(X), make_shape(make_shape(M, Int<X_BITS>{}), main_loop_k),
+                    make_stride(make_stride(main_loop_k, M * main_loop_k), _1{}));
+    auto B_tensor =
+        make_tensor(make_gmem_ptr<type>(W), make_shape(make_shape(N, Int<W_BITS>{}), main_loop_k),
+                    make_stride(make_stride(main_loop_k, N * main_loop_k), _1{}));
     // pred tensor for OOB(out of bound) check
     auto A_pred_tensor = make_identity_tensor(shape(A_tensor));
     auto B_pred_tensor = make_identity_tensor(shape(B_tensor));
 
     // gmem tile tensor
-    auto gA = local_tile(A_tensor, make_tile(Int<MainLoop_BLOCK_M>{}, Int<MainLoop_BLOCK_K>{}),
-                         make_coord(bidx_m, _)); //[P * block_m, block_k, k_loop]
-    auto gB = local_tile(B_tensor, make_tile(Int<MainLoop_BLOCK_N>{}, Int<MainLoop_BLOCK_K>{}),
-                         make_coord(bidx_n, _)); //[Q * block_n, block_k, k_loop]
+    auto gA =
+        local_tile(A_tensor,
+                   make_tile(make_tile(Int<BLOCK_M>{}, Int<X_BITS>{}), Int<MainLoop_BLOCK_K>{}),
+                   make_coord(bidx_m, _)); //[(block_m, P), block_k, k_loop]
+    auto gB =
+        local_tile(B_tensor,
+                   make_tile(make_tile(Int<BLOCK_N>{}, Int<W_BITS>{}), Int<MainLoop_BLOCK_K>{}),
+                   make_coord(bidx_n, _)); //[(block_n, Q), block_k, k_loop]
     auto gA_pred =
-        local_tile(A_pred_tensor, make_tile(Int<MainLoop_BLOCK_M>{}, Int<MainLoop_BLOCK_K>{}),
-                   make_coord(bidx_m, _)); //[P * block_m, block_k, k_loop]
+        local_tile(A_pred_tensor,
+                   make_tile(make_tile(Int<BLOCK_M>{}, Int<X_BITS>{}), Int<MainLoop_BLOCK_K>{}),
+                   make_coord(bidx_m, _)); //[(block_m, P), block_k, k_loop]
     auto gB_pred =
-        local_tile(B_pred_tensor, make_tile(Int<MainLoop_BLOCK_M>{}, Int<MainLoop_BLOCK_K>{}),
-                   make_coord(bidx_m, _)); //[P * block_m, block_k, k_loop]
+        local_tile(B_pred_tensor,
+                   make_tile(make_tile(Int<BLOCK_N>{}, Int<W_BITS>{}), Int<MainLoop_BLOCK_K>{}),
+                   make_coord(bidx_m, _)); //[(block_n, Q), block_k, k_loop]
 
     // smem tile tensor
     type *a_smem_ptr = reinterpret_cast<type *>(shared_mem_workspace);
 
-    type *b_smem_ptr = a_smem_ptr + ASmemSize / 8; // bit pack
+    type *b_smem_ptr = a_smem_ptr + ASmemSize;
 
     auto sA = make_tensor(make_smem_ptr<type>(a_smem_ptr),
                           SmemALayout{}); // [P * block_m, block_k, stage]
@@ -269,6 +289,14 @@ AqCuteKernel<QuantType, ThreadBlockShape, WarpLayout, MmaShape, kThreadBlockStag
         print(b_s2r_copy);
         print("\nc_r2s_copy\n");
         print(c_r2s_copy);
+        print("\ngA\n");
+        print(gA);
+        print("\ngB\n");
+        print(gB);
+        print("\ngA_pred\n");
+        print(gA_pred);
+        print("\ngB_pred\n");
+        print(gB_pred);
         print("\ntArA_mma\n");
         print(tArA_mma);
         print("\ntBrB_mma\n");
@@ -297,64 +325,52 @@ AqCuteKernel<QuantType, ThreadBlockShape, WarpLayout, MmaShape, kThreadBlockStag
         print(tCsS_r2s_copy);
     }
 #endif
-    // main loop
+    //     // main loop
     const int k_main_loop_cnt = size<2>(gA);
     const int k_inner_loop_cnt = size<2>(tArA_mma);
     int g2s_s_write_cnt = 0;
     int g2s_g_read_cnt = 0;
-    int s2r_r_read_cnt = 0;
-
-    int m_tile_bound = (bidx_m + 1) * MainLoop_BLOCK_M;
-    int n_tile_bound = (bidx_n + 1) * MainLoop_BLOCK_N;
+    int s2r_s_read_cnt = 0;
+    int next_s2r_s_read_cnt = 0;
+    auto m_tile_bound = make_tuple((bidx_m + 1) * BLOCK_M, Int<X_BITS>{});
+    auto n_tile_bound = make_tuple((bidx_n + 1) * BLOCK_N, Int<W_BITS>{});
     // g2s pipeline
 #pragma unroll
     for (int i_stage = 0; i_stage < kStage - 1; i_stage++) {
         auto a_tile_bound = make_tuple(m_tile_bound, (i_stage + 1) * MainLoop_BLOCK_K);
         auto b_tile_bound = make_tuple(n_tile_bound, (i_stage + 1) * MainLoop_BLOCK_K);
+        if (g2s_g_read_cnt < k_main_loop_cnt) {
+            copy_strip_zfill(a_g2s_copy, tAgA_g2s_copy_pred(_, _, _, i_stage),
+                             tAgA_g2s_copy(_, _, _, i_stage), tAsA_g2s_copy(_, _, _, i_stage),
+                             a_tile_bound, shape(A_tensor));
 
-        copy_strip_zfill(a_g2s_copy, tAgA_g2s_copy_pred(_, _, _, i_stage),
-                         tAgA_g2s_copy(_, _, _, i_stage), tAsA_g2s_copy(_, _, _, i_stage),
-                         a_tile_bound, shape(A_tensor));
-        copy_strip_zfill(b_g2s_copy, tBgB_g2s_copy_pred(_, _, _, i_stage),
-                         tBgB_g2s_copy(_, _, _, i_stage), tBsB_g2s_copy(_, _, _, i_stage),
-                         b_tile_bound, shape(B_tensor));
-        // #pragma unroll
-        //         for (int mk_idx = 0; mk_idx < size<1>(group_modes<1, 3>(tAgA_g2s_copy_pred)); mk_idx++) {
-        //             auto pred = tAgA_g2s_copy_pred(_0{}, _, _, i_stage);
-        //             auto mk_coord = pred(mk_idx);
-        //             // strip data OOB block tile
-        //             if (elem_less(mk_coord, a_tile_bound)) {
-        //                 // fill zeros block tile OOB global shape
-        //                 copy_if(
-        //                     a_g2s_copy,
-        //                     [&](auto... coords) { return elem_less(pred(coords...), shape(A_tensor)); },
-        //                     tAgA_g2s_copy(_, _, _, i_stage), tAsA_g2s_copy(_, _, _, i_stage));
-        //             }
-        //         }
-        // #pragma unroll
-        //         for (int nk_idx = 0; nk_idx < size<1>(group_modes<1, 3>(tBgB_g2s_copy_pred)); nk_idx++) {
-        //             auto pred = tBgB_g2s_copy_pred(_0{}, _, _, i_stage);
-        //             auto nk_coord = pred(nk_idx);
-        //             // strip data OOB block tile
-        //             if (elem_less(nk_coord, b_tile_bound)) {
-        //                 // fill zeros block tile OOB global shape
-        //                 copy_if(
-        //                     b_g2s_copy,
-        //                     [&](auto... coords) { return elem_less(pred(coords...), shape(B_tensor)); },
-        //                     tBgB_g2s_copy(_, _, _, i_stage), tBsB_g2s_copy(_, _, _, i_stage));
-        //             }
-        //         }
-        cp_async_fence();
+            copy_strip_zfill(b_g2s_copy, tBgB_g2s_copy_pred(_, _, _, i_stage),
+                             tBgB_g2s_copy(_, _, _, i_stage), tBsB_g2s_copy(_, _, _, i_stage),
+                             b_tile_bound, shape(B_tensor));
+        }
         g2s_g_read_cnt++;
         g2s_s_write_cnt++;
+        cp_async_fence();
     }
-    // wait first cp_async commit
-    cp_async_wait<kStage - 2>();
-    __syncthreads();
+    // cp_async_wait<kStage - 2>();
+    // __syncthreads();
+    // if (thread(tid)) {
+    //     print("\nsA\n");
+    //     print_tensor(sA);
+    //     print("\nBA\n");
+    //     print_tensor(sB);
+    // }
+    // __syncthreads();
 
-    // load first s2r
-    copy(a_s2r_copy, tAsA_s2r_copy(_, _, 0, s2r_r_read_cnt), tArA_s2r_copy(_, _, 0));
-    copy(b_s2r_copy, tBsB_s2r_copy(_, _, 0, s2r_r_read_cnt), tBrB_s2r_copy(_, _, 0));
+    // enable s2r register pipeline when k_inner_loop_cnt > 1
+    if (k_inner_loop_cnt > 1) {
+        // wait first cp_async commit
+        cp_async_wait<kStage - 2>();
+        __syncthreads();
+        // load first s2r
+        copy(a_s2r_copy, tAsA_s2r_copy(_, _, 0, s2r_s_read_cnt), tArA_s2r_copy(_, _, 0));
+        copy(b_s2r_copy, tBsB_s2r_copy(_, _, 0, s2r_s_read_cnt), tBrB_s2r_copy(_, _, 0));
+    }
 
 #pragma unroll
     for (int k_main_loop_idx = 0; k_main_loop_idx < k_main_loop_cnt; k_main_loop_idx++) {
@@ -364,20 +380,23 @@ AqCuteKernel<QuantType, ThreadBlockShape, WarpLayout, MmaShape, kThreadBlockStag
             // wait next stage commit
             if (k_inner_loop_idx == k_inner_loop_cnt - 1) {
                 cp_async_wait<kStage - 2>();
-                s2r_r_read_cnt = (s2r_r_read_cnt + 1) % kStage;
+                __syncthreads();
+                s2r_s_read_cnt = next_s2r_s_read_cnt;
+                // s2r_s_read_cnt = (s2r_s_read_cnt + 1) % kStage;
             }
             // s2r pipeline
-            copy(a_s2r_copy, tAsA_s2r_copy(_, _, next_k_inner_loop_idx, s2r_r_read_cnt),
+            copy(a_s2r_copy, tAsA_s2r_copy(_, _, next_k_inner_loop_idx, s2r_s_read_cnt),
                  tArA_s2r_copy(_, _, next_k_inner_loop_idx));
-            copy(b_s2r_copy, tBsB_s2r_copy(_, _, next_k_inner_loop_idx, s2r_r_read_cnt),
+            copy(b_s2r_copy, tBsB_s2r_copy(_, _, next_k_inner_loop_idx, s2r_s_read_cnt),
                  tBrB_s2r_copy(_, _, next_k_inner_loop_idx));
-            // load stage
+            // load last stage
             if (k_inner_loop_idx == 0) {
+                auto a_tile_bound =
+                    make_tuple(m_tile_bound, (g2s_g_read_cnt + 1) * MainLoop_BLOCK_K);
+                auto b_tile_bound =
+                    make_tuple(n_tile_bound, (g2s_g_read_cnt + 1) * MainLoop_BLOCK_K);
+                // OOB do not g2s copy
                 if (g2s_g_read_cnt < k_main_loop_cnt) {
-                    auto a_tile_bound =
-                        make_tuple(m_tile_bound, (g2s_g_read_cnt + 1) * MainLoop_BLOCK_K);
-                    auto b_tile_bound =
-                        make_tuple(n_tile_bound, (g2s_g_read_cnt + 1) * MainLoop_BLOCK_K);
                     copy_strip_zfill(a_g2s_copy, tAgA_g2s_copy_pred(_, _, _, g2s_g_read_cnt),
                                      tAgA_g2s_copy(_, _, _, g2s_g_read_cnt),
                                      tAsA_g2s_copy(_, _, _, g2s_s_write_cnt), a_tile_bound,
@@ -386,16 +405,30 @@ AqCuteKernel<QuantType, ThreadBlockShape, WarpLayout, MmaShape, kThreadBlockStag
                                      tBgB_g2s_copy(_, _, _, g2s_g_read_cnt),
                                      tBsB_g2s_copy(_, _, _, g2s_s_write_cnt), b_tile_bound,
                                      shape(B_tensor));
-                    g2s_g_read_cnt++;
-                    g2s_s_write_cnt = (g2s_s_write_cnt + 1) % kStage;
                 }
+                g2s_g_read_cnt++;
+                g2s_s_write_cnt = s2r_s_read_cnt;
+                next_s2r_s_read_cnt = (s2r_s_read_cnt + 1) % kStage;
                 cp_async_fence();
             }
             // gemm
             gemm(mma, tArA_mma(_, _, k_inner_loop_idx), tBrB_mma(_, _, k_inner_loop_idx), tCrC_mma);
         }
     }
+
     copy(c_r2s_copy, tCrC_r2s_copy, tCsS_r2s_copy);
+    __syncthreads();
+
+#if 0 // check mainloop result
+    if (thread(tid)) {
+        print("\ntid:%d\n", threadIdx.x);
+        print("\ntCrC\n");
+        print_tensor(tCrC_mma);
+        print("\nsC\n");
+        print_tensor(sC);
+    }
+    __syncthreads();
+#endif
 }
 
 // before Ampere
@@ -502,7 +535,7 @@ AqCuteKernel<QuantType, ThreadBlockShape, WarpLayout, MmaShape, kThreadBlockStag
     // epilogue
 
     // thread is valid that pred in [block_m, block_n] range
-    if (elem_less(tCsC_s2r_copy_pred(0), make_tuple(Int<BLOCK_M>{}, Int<BLOCK_N>{}))) {
+    if (elem_less(tCsC_s2r_copy_pred(_0{}), make_tuple(Int<BLOCK_M>{}, Int<BLOCK_N>{}))) {
         acc_type multiplier = 1;
 #pragma unroll
         for (int x_bit_idx = 0; x_bit_idx < X_BITS; x_bit_idx++) {
@@ -518,7 +551,7 @@ AqCuteKernel<QuantType, ThreadBlockShape, WarpLayout, MmaShape, kThreadBlockStag
                 cur_multiplier = (quant_signed && (w_bit_idx == W_BITS - 2)) ? -2 * cur_multiplier :
                                                                                2 * cur_multiplier;
             }
-            multiplier >>= 1;
+            multiplier <<= 1;
         }
         //r2g store
         // copy(c_r2g_copy, tCrC_r2g_copy, tCgC_r2g_copy);
