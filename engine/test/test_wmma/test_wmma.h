@@ -32,13 +32,15 @@
             h_ref_out, false, SIGNED, exec_dur, pack_dur, stream, warmup, repeat);             \
         if (ret == 0 && gflop_count / exec_dur > max_gflop) {                                  \
             max_gflop = gflop_count / exec_dur;                                                \
+            max_bw = gbyte_count / (exec_dur * 1e-3);                                          \
             best_config.str("");                                                               \
             best_config << BM << ", " << BN << ", " << BK << ", " << WM << ", " << WN << ", "  \
                         << WK << ", " << MMA_M << ", " << MMA_N << ", " << MMA_K << ", "       \
                         << NSTAGE;                                                             \
         }                                                                                      \
-        printf("packing %f (us) exec %f (us) %f TOPS | %f B-TOPS | %s\n", pack_dur * 1e3,      \
-               exec_dur * 1e3, gflop_count / exec_dur, true_gflop_count / exec_dur,            \
+        printf("packing %f (us) exec %f (us)| %f GBPS | %f TOPS | %f B-TOPS | %s\n",           \
+               pack_dur * 1e3, exec_dur * 1e3, gbyte_count / (exec_dur * 1e-3),                \
+               gflop_count / exec_dur, true_gflop_count / exec_dur,                            \
                ret == 0  ? "PASSED" :                                                          \
                ret == -1 ? "ERROR" :                                                           \
                            "FAILED");                                                          \

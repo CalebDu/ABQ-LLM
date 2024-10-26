@@ -19,8 +19,8 @@
 #include "test/test_mma/test_mma.h"
 
 void test_mma_w2a2(int x_bits, int w_bits, int *d_x, int *d_w, int *d_x_pack, int *d_w_pack, int m,
-                    int n, int k, int *d_out, int *h_out, int *h_ref_out, int warmup, int repeat,
-                    bool quant_sign, cudaStream_t stream)
+                   int n, int k, int *d_out, int *h_out, int *h_ref_out, int warmup, int repeat,
+                   bool quant_sign, cudaStream_t stream)
 {
 #ifdef W2A2
     std::string config_str;
@@ -37,6 +37,9 @@ void test_mma_w2a2(int x_bits, int w_bits, int *d_x, int *d_w, int *d_x_pack, in
     float true_gflop_count = (float)m / 1e9 * n * k * 2 * x_bits * w_bits;
     float gflop_count = (float)m / 1e9 * n * k * 2;
     float max_gflop = 0;
+    float gbyte_count =
+        float((x_bits * m * k + x_bits * n * k) / 8 + (m * k * sizeof(int32_t))) / 1e9;
+    float max_bw = 0;
     std::stringstream best_config;
 
     if (quant_sign) {
@@ -520,7 +523,9 @@ void test_mma_w2a2(int x_bits, int w_bits, int *d_x, int *d_w, int *d_x_pack, in
     } else {
     }
 
-    printf("The best kernel config is %s with %f TOPS\n", best_config.str().c_str(), max_gflop);
+
+    printf("The best kernel config is %s with %f TOPS, BW %f GBPS\n", best_config.str().c_str(),
+           max_gflop, max_bw);
 #else
     printf("unsupport w%da%d\n", w_bits, x_bits);
 #endif

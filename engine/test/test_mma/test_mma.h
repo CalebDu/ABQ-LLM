@@ -18,30 +18,32 @@
 #include "common/pack.h"
 #include "common/timer.h"
 
-#define TEST(X_BITS, W_BITS, SIGNED, BM, BN, BK, WM, WN, WK, MMA_M, MMA_N, MMA_K, NSTAGE)      \
-    {                                                                                          \
-        std::cout << GPU_ARCH << " " << config_str << " ";                                     \
-        printf("%d %d %d %d %d %d %d %d %d %d ", BM, BN, BK, WM, WN, WK, MMA_M, MMA_N, MMA_K,  \
-               NSTAGE);                                                                        \
-        int ret = benchmark<AQ_INIT_FUN(AqBMMA), AQ_EXEC_FUN(AqBMMA), AQ_OP_STATE(AqBMMA)>( \
+#define TEST(X_BITS, W_BITS, SIGNED, BM, BN, BK, WM, WN, WK, MMA_M, MMA_N, MMA_K, NSTAGE)     \
+    {                                                                                         \
+        std::cout << GPU_ARCH << " " << config_str << " ";                                    \
+        printf("%d %d %d %d %d %d %d %d %d %d ", BM, BN, BK, WM, WN, WK, MMA_M, MMA_N, MMA_K, \
+               NSTAGE);                                                                       \
+        int ret = benchmark<AQ_INIT_FUN(AqBMMA), AQ_EXEC_FUN(AqBMMA), AQ_OP_STATE(AqBMMA)>(   \
             AQ_NAME_FUN(AqBMMA, Init, X_BITS, W_BITS, SIGNED, BM, BN, BK, WM, WN, WK, MMA_M,  \
-                        MMA_N, MMA_K, NSTAGE),                                                 \
+                        MMA_N, MMA_K, NSTAGE),                                                \
             AQ_NAME_FUN(AqBMMA, Exec, X_BITS, W_BITS, SIGNED, BM, BN, BK, WM, WN, WK, MMA_M,  \
-                        MMA_N, MMA_K, NSTAGE),                                                 \
-            x_bits, w_bits, d_x, d_w, d_x_pack, d_w_pack, m, n, k, d_out, nullptr, h_out,      \
-            h_ref_out, false, SIGNED, exec_dur, pack_dur, stream, warmup, repeat);             \
-        if (ret == 0 && gflop_count / exec_dur > max_gflop) {                                  \
-            max_gflop = gflop_count / exec_dur;                                                \
-            best_config.str("");                                                               \
-            best_config << BM << ", " << BN << ", " << BK << ", " << WM << ", " << WN << ", "  \
-                        << WK << ", " << MMA_M << ", " << MMA_N << ", " << MMA_K << ", "       \
-                        << NSTAGE;                                                             \
-        }                                                                                      \
-        printf("packing %f (us) exec %f (us) %f TOPS | %f B-TOPS | %s\n", pack_dur * 1e3,      \
-               exec_dur * 1e3, gflop_count / exec_dur, true_gflop_count / exec_dur,            \
-               ret == 0  ? "PASSED" :                                                          \
-               ret == -1 ? "ERROR" :                                                           \
-                           "FAILED");                                                          \
+                        MMA_N, MMA_K, NSTAGE),                                                \
+            x_bits, w_bits, d_x, d_w, d_x_pack, d_w_pack, m, n, k, d_out, nullptr, h_out,     \
+            h_ref_out, false, SIGNED, exec_dur, pack_dur, stream, warmup, repeat);            \
+        if (ret == 0 && gflop_count / exec_dur > max_gflop) {                                 \
+            max_gflop = gflop_count / exec_dur;                                               \
+            max_bw = gbyte_count / (exec_dur * 1e-3);                                         \
+            best_config.str("");                                                              \
+            best_config << BM << ", " << BN << ", " << BK << ", " << WM << ", " << WN << ", " \
+                        << WK << ", " << MMA_M << ", " << MMA_N << ", " << MMA_K << ", "      \
+                        << NSTAGE;                                                            \
+        }                                                                                     \
+        printf("packing %f (us) exec %f (us)| %f GBPS | %f TOPS | %f B-TOPS | %s\n",          \
+               pack_dur * 1e3, exec_dur * 1e3, gbyte_count / (exec_dur * 1e-3),               \
+               gflop_count / exec_dur, true_gflop_count / exec_dur,                           \
+               ret == 0  ? "PASSED" :                                                         \
+               ret == -1 ? "ERROR" :                                                          \
+                           "FAILED");                                                         \
     }
 
 inline bool isCudaSuccess(cudaError_t status)
@@ -160,38 +162,38 @@ inline int benchmark(InitFuncType init_fn, ExecFuncType exec_fn, int X_BITS, int
 }
 
 void test_mma_w2a2(int x_bits, int w_bits, int *d_x, int *d_w, int *d_x_pack, int *d_w_pack, int m,
-                    int n, int k, int *d_out, int *h_out, int *h_ref_out, int warmup, int repeat,
-                    bool quant_sign, cudaStream_t stream);
+                   int n, int k, int *d_out, int *h_out, int *h_ref_out, int warmup, int repeat,
+                   bool quant_sign, cudaStream_t stream);
 void test_mma_w2a4(int x_bits, int w_bits, int *d_x, int *d_w, int *d_x_pack, int *d_w_pack, int m,
-                    int n, int k, int *d_out, int *h_out, int *h_ref_out, int warmup, int repeat,
-                    bool quant_sign, cudaStream_t stream);
+                   int n, int k, int *d_out, int *h_out, int *h_ref_out, int warmup, int repeat,
+                   bool quant_sign, cudaStream_t stream);
 void test_mma_w2a6(int x_bits, int w_bits, int *d_x, int *d_w, int *d_x_pack, int *d_w_pack, int m,
-                    int n, int k, int *d_out, int *h_out, int *h_ref_out, int warmup, int repeat,
-                    bool quant_sign, cudaStream_t stream);
+                   int n, int k, int *d_out, int *h_out, int *h_ref_out, int warmup, int repeat,
+                   bool quant_sign, cudaStream_t stream);
 void test_mma_w2a8(int x_bits, int w_bits, int *d_x, int *d_w, int *d_x_pack, int *d_w_pack, int m,
-                    int n, int k, int *d_out, int *h_out, int *h_ref_out, int warmup, int repeat,
-                    bool quant_sign, cudaStream_t stream);
+                   int n, int k, int *d_out, int *h_out, int *h_ref_out, int warmup, int repeat,
+                   bool quant_sign, cudaStream_t stream);
 void test_mma_w3a3(int x_bits, int w_bits, int *d_x, int *d_w, int *d_x_pack, int *d_w_pack, int m,
-                    int n, int k, int *d_out, int *h_out, int *h_ref_out, int warmup, int repeat,
-                    bool quant_sign, cudaStream_t stream);
+                   int n, int k, int *d_out, int *h_out, int *h_ref_out, int warmup, int repeat,
+                   bool quant_sign, cudaStream_t stream);
 void test_mma_w3a8(int x_bits, int w_bits, int *d_x, int *d_w, int *d_x_pack, int *d_w_pack, int m,
-                    int n, int k, int *d_out, int *h_out, int *h_ref_out, int warmup, int repeat,
-                    bool quant_sign, cudaStream_t stream);
+                   int n, int k, int *d_out, int *h_out, int *h_ref_out, int warmup, int repeat,
+                   bool quant_sign, cudaStream_t stream);
 void test_mma_w4a4(int x_bits, int w_bits, int *d_x, int *d_w, int *d_x_pack, int *d_w_pack, int m,
-                    int n, int k, int *d_out, int *h_out, int *h_ref_out, int warmup, int repeat,
-                    bool quant_sign, cudaStream_t stream);
+                   int n, int k, int *d_out, int *h_out, int *h_ref_out, int warmup, int repeat,
+                   bool quant_sign, cudaStream_t stream);
 void test_mma_w4a8(int x_bits, int w_bits, int *d_x, int *d_w, int *d_x_pack, int *d_w_pack, int m,
-                    int n, int k, int *d_out, int *h_out, int *h_ref_out, int warmup, int repeat,
-                    bool quant_sign, cudaStream_t stream);
+                   int n, int k, int *d_out, int *h_out, int *h_ref_out, int warmup, int repeat,
+                   bool quant_sign, cudaStream_t stream);
 void test_mma_w5a5(int x_bits, int w_bits, int *d_x, int *d_w, int *d_x_pack, int *d_w_pack, int m,
-                    int n, int k, int *d_out, int *h_out, int *h_ref_out, int warmup, int repeat,
-                    bool quant_sign, cudaStream_t stream);
+                   int n, int k, int *d_out, int *h_out, int *h_ref_out, int warmup, int repeat,
+                   bool quant_sign, cudaStream_t stream);
 void test_mma_w6a6(int x_bits, int w_bits, int *d_x, int *d_w, int *d_x_pack, int *d_w_pack, int m,
-                    int n, int k, int *d_out, int *h_out, int *h_ref_out, int warmup, int repeat,
-                    bool quant_sign, cudaStream_t stream);
+                   int n, int k, int *d_out, int *h_out, int *h_ref_out, int warmup, int repeat,
+                   bool quant_sign, cudaStream_t stream);
 void test_mma_w7a7(int x_bits, int w_bits, int *d_x, int *d_w, int *d_x_pack, int *d_w_pack, int m,
-                    int n, int k, int *d_out, int *h_out, int *h_ref_out, int warmup, int repeat,
-                    bool quant_sign, cudaStream_t stream);
+                   int n, int k, int *d_out, int *h_out, int *h_ref_out, int warmup, int repeat,
+                   bool quant_sign, cudaStream_t stream);
 void test_mma_w8a8(int x_bits, int w_bits, int *d_x, int *d_w, int *d_x_pack, int *d_w_pack, int m,
-                    int n, int k, int *d_out, int *h_out, int *h_ref_out, int warmup, int repeat,
-                    bool quant_sign, cudaStream_t stream);
+                   int n, int k, int *d_out, int *h_out, int *h_ref_out, int warmup, int repeat,
+                   bool quant_sign, cudaStream_t stream);

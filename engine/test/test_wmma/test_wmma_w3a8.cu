@@ -38,7 +38,9 @@ void test_wmma_w3a8(int x_bits, int w_bits, int *d_x, int *d_w, int *d_x_pack, i
     float gflop_count = (float)m / 1e9 * n * k * 2;
     float max_gflop = 0;
     std::stringstream best_config;
-
+    float gbyte_count =
+        float((x_bits * m * k + x_bits * n * k) / 8 + (m * k * sizeof(int32_t))) / 1e9;
+    float max_bw = 0;
     if (quant_sign) {
         ////// W3A8 int
         // cta<1,32,256> warp<8,48,128> mma<8,8,128>   WARPS[1x2]
@@ -413,7 +415,8 @@ void test_wmma_w3a8(int x_bits, int w_bits, int *d_x, int *d_w, int *d_x_pack, i
         TEST(8, 3, true, 8, 32, 512, 16, 96, 128, 8, 8, 128, 2);
     }
 
-    printf("The best kernel config is %s with %f TOPS\n", best_config.str().c_str(), max_gflop);
+    printf("The best kernel config is %s with %f TOPS, BW %f GBPS\n", best_config.str().c_str(),
+           max_gflop, max_bw);
 #else
     printf("unsupport w%da%d\n", w_bits, x_bits);
 #endif
