@@ -4,7 +4,7 @@
 #include "common/memory.h"
 #include "aq_cute_atom.h"
 #include <cstdint>
-#define tid 24 // thread for debug
+#define tid 0 // thread for debug
 template <class... CopyArgs, class PredTensor, class SrcEngine, class SrcLayout, class DstEngine,
           class DstLayout, class StripTuple, class ZfillTuple>
 __device__ __forceinline__ static void
@@ -95,6 +95,8 @@ struct AqCuteKernel {
     static_assert(MainLoop_BLOCK_K % (MMA_K * Warp_K) == 0,
                   "BLOCK_K must be divisible by (mma op k * warp layout k)");
 
+    static_assert(BLOCK_M % 4 == 0, "BLOCK_M must be divisible by 4");
+    static_assert(BLOCK_N % 8 == 0, "BLOCK_N must be divisible by 8");
     // --- TiledMMA ---
     using mma_atom = typename AqCuteMmaAtom<MmaShape>::mma_atom;
 
@@ -109,7 +111,7 @@ struct AqCuteKernel {
 
     // --- Smem Layout ---
     // AB Swizzle
-    using SwizzleAtom = SwizzleAtom<MainLoop_BLOCK_M, MainLoop_BLOCK_N, MainLoop_BLOCK_K>;
+    using SwizzleAtom = SwizzleAtom<BLOCK_M, BLOCK_N, BLOCK_K>;
     using AB_Swizzle = typename SwizzleAtom::AB_Swizzle;
     // SmemLayoutAtom [8, block_k]
     using SmemABLayoutAtom = decltype(composition(
@@ -129,11 +131,20 @@ struct AqCuteKernel {
     static constexpr size_t BSmemSize = cosize(SmemBLayout{}) / 8; // bit pack
     static constexpr size_t inputSmemSize = ASmemSize + BSmemSize;
 
-    // todo swizzle SmemCLayout
     // SmemCLayout [x_bit * block_m, w_bit * block_n]
-    using SmemCLayout =
-        decltype(make_layout(make_shape(Int<MainLoop_BLOCK_M>{}, Int<MainLoop_BLOCK_N>{}),
-                             make_stride(Int<MainLoop_BLOCK_N>{}, _1{})));
+
+    // using SmemR2SCLayout =
+    //     // decltype(composition(C_Swizzle{}, make_layout(make_shape(Int<BLOCK_M>{}, Int<BLOCK_N>{}),
+    //     //                                               make_stride(Int<BLOCK_N>{}, Int<1>{}))));
+    //     decltype(make_layout(make_shape(Int<4>{}, Int<8>{}), make_stride(Int<8>{}, Int<1>{})));
+    // using SmemCLayoutAtom = decltype(make_layout(
+    //     make_shape(make_shape(_4{}, Int<BLOCK_M / 4>{}), make_shape(_8{}, Int<BLOCK_N / 8>{})),
+    //     make_stride(make_stride(_8{}, Int<32 * BLOCK_N / 8>{}), make_stride(_1{}, _32{}))));
+    using SmemCLayout = decltype(make_layout(
+        make_shape(make_shape(_4{}, Int<BLOCK_M / 4>{}, Int<X_BITS>{}),
+                   make_shape(_8{}, Int<BLOCK_N / 8>{}, Int<W_BITS>{})),
+        make_stride(make_stride(_8{}, Int<4 * BLOCK_N>{}, Int<BLOCK_M * BLOCK_N * W_BITS>{}),
+                    make_stride(_1{}, _32{}, Int<BLOCK_M * BLOCK_N>{}))));
 
     static constexpr size_t outputSmemSize = cosize(SmemCLayout{}) * sizeof(acc_type);
     // total Smem usage = max(ASmemSize + BSmemSize, CSmemSize)
@@ -521,25 +532,44 @@ AqCuteKernel<QuantType, ThreadBlockShape, WarpLayout, MmaShape, kThreadBlockStag
     auto tCgC_r2g_copy_pred = c_thr_r2g_copy.partition_D(gD_pred);
 
 #if 0 // print for debug
-    if (thread0()) {
+    if (thread(tid)) {
         print("\nc_s2r_copy\n");
         print(c_s2r_copy);
         print("\nc_r2g_copy\n");
         print(c_r2g_copy);
+        print("\nsC\n");
+        print(sC);
+        print("\nsC_pre\n");
+        print(sC_pred);
+        print("\nsC_tiled\n");
+        print(sC_tiled);
         print("\ntCsC_s2r_copy\n");
         print(tCsC_s2r_copy);
+        print("\ntCsC_s2r_copy_pred\n");
+        print(tCsC_s2r_copy_pred);
         print("\ntCrC_s2r_copy\n");
         print(tCrC_s2r_copy);
         print("\ntCrC_r2g_copy\n");
         print(tCrC_r2g_copy);
         print("\ntCgC_r2g_copy\n");
         print(tCgC_r2g_copy);
+        print("\ntCgC_r2g_copy_pred\n");
+        print(tCgC_r2g_copy_pred);
     }
 #endif
     // epilogue
+    auto epilog_bound = make_tuple(make_tuple(Int<4>{}, Int<BLOCK_M / 4>{}, _1{}),
+                                   make_tuple(Int<8>{}, Int<BLOCK_N / 8>{}, _1{}));
+    // if (thread(tid)) {
+    //     print("\nepilog\n");
+    //     print(epilog_bound);
+    //     print("\npred\n");
+    //     print(tCsC_s2r_copy_pred(_0{}));
+    //     print("\ncheck:%d\n", elem_less(tCsC_s2r_copy_pred(_0{}), epilog_bound));
+    // }
 
     // thread is valid that pred in [block_m, block_n] range
-    if (elem_less(tCsC_s2r_copy_pred(_0{}), make_tuple(Int<BLOCK_M>{}, Int<BLOCK_N>{}))) {
+    if (elem_less(tCsC_s2r_copy_pred(_0{}), epilog_bound)) {
         acc_type multiplier = 1;
 #pragma unroll
         for (int x_bit_idx = 0; x_bit_idx < X_BITS; x_bit_idx++) {
@@ -548,6 +578,10 @@ AqCuteKernel<QuantType, ThreadBlockShape, WarpLayout, MmaShape, kThreadBlockStag
 #pragma unroll
             for (int w_bit_idx = 0; w_bit_idx < W_BITS; w_bit_idx++) {
                 copy(c_s2r_copy, tCsC_s2r_copy(_, _, _, x_bit_idx, w_bit_idx), tCrC_s2r_copy);
+                // if (thread(tid)) {
+                //     print("\ns2r_copy\n");
+                //     print(tCrC_s2r_copy);
+                // }
 #pragma unroll
                 for (int i = 0; i < size(tCrC_s2r_copy); i++) {
                     tCrC_reduce(i) += cur_multiplier * tCrC_s2r_copy(i);
@@ -559,9 +593,16 @@ AqCuteKernel<QuantType, ThreadBlockShape, WarpLayout, MmaShape, kThreadBlockStag
         }
         //r2g store
         // copy(c_r2g_copy, tCrC_r2g_copy, tCgC_r2g_copy);
+        // if (thread(tid)) {
+        //     print(tCrC_r2g_copy);
+        //     print("\n");
+        //     print(tCgC_r2g_copy_pred(_0{}));
+        // }
         copy_if(
             c_r2g_copy,
-            [&](auto... coords) { return elem_less(gD_pred(coords...), shape(D_tensor)); },
+            [&](auto... coords) {
+                return elem_less(tCgC_r2g_copy_pred(coords...), shape(D_tensor));
+            },
             tCrC_r2g_copy, tCgC_r2g_copy);
     }
 }

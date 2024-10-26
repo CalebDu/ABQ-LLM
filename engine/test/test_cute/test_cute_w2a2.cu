@@ -59,6 +59,9 @@ void test_cute_w2a2(int x_bits, int w_bits, int *d_x, int *d_w, int *d_x_pack, i
         TEST(2, 2, true, 4, 64, 128, 1, 2, 1, 8, 8, 128, 4);
         // cta<4,64,128>  warp layout<1,2,1> mma<8,8,128> stage5
         TEST(2, 2, true, 4, 64, 128, 1, 2, 1, 8, 8, 128, 5);
+
+        // cta<4,64,128>  warp layout<1,4,1> mma<8,8,128> stage5
+        TEST(2, 2, true, 4, 64, 128, 1, 4, 1, 8, 8, 128, 2);
     } else {
     }
 

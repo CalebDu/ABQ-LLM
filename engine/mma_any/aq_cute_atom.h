@@ -35,8 +35,10 @@ struct AqCuteCopy {
     using G2SCopyTraits = Copy_Traits<G2SCopyOp>;
     using G2SCopyAtom = Copy_Atom<G2SCopyTraits, type>;
 
-    static constexpr int G2SCopy_thread_k =(ThreadBlockShape::K / 128 == 1)?1:
-        ROUND_UP(ThreadBlockShape::K / 128, 2); // 128 uint1b_t(int128_t) per thread
+    static constexpr int G2SCopy_thread_k =
+        (ThreadBlockShape::K / 128 == 1) ?
+            1 :
+            ROUND_UP(ThreadBlockShape::K / 128, 2); // 128 uint1b_t(int128_t) per thread
 
     static constexpr int G2SCopy_thread_m = kThread / G2SCopy_thread_k;
     static constexpr int G2SCopy_thread_n = kThread / G2SCopy_thread_k;
@@ -72,18 +74,23 @@ struct AqCuteCopy {
     // S2R load copy 4 int32 (128bit) per thread
     using EpilogS2RCopyAtom = Copy_Atom<UniversalCopy<cute::uint128_t>, acc_type>;
     // CTA block S2R load copy [block_m, block_n] tile from [P * block_m, Q * block_n]
-    using EpilogS2RCopy = decltype(make_tiled_copy(
-        EpilogS2RCopyAtom{},
-        make_layout(make_shape(Int<ThreadBlockShape::M>{}, Int<Epilog_thread_n>{}), LayoutRight{}),
-        make_layout(make_shape(_1{}, _4{}))));
-
+    // using EpilogS2RCopy = decltype(make_tiled_copy(
+    //     EpilogS2RCopyAtom{},
+    //     make_layout(make_shape(Int<ThreadBlockShape::M>{}, Int<Epilog_thread_n>{}), LayoutRight{}),
+    //     make_layout(make_shape(_1{}, _4{}))));
+    using EpilogS2RCopy =
+        decltype(make_tiled_copy(EpilogS2RCopyAtom{},
+                                 make_layout(make_shape(_4{}, make_shape(_2{}, Int<kThread / 8>{})),
+                                             make_stride(_2{}, make_stride(_1{}, _8{}))),
+                                 make_layout(make_shape(_1{}, make_shape(_4{}, _1{})))));
     // epilogue R2G store copy vectorization
     using EpilogR2GCopyAtom = EpilogS2RCopyAtom;
     // CTA block R2G store copy [block_m, block_n] tile to [m, n]
-    using EpilogR2GCopy = decltype(make_tiled_copy(
-        EpilogR2GCopyAtom{},
-        make_layout(make_shape(Int<ThreadBlockShape::M>{}, Int<Epilog_thread_n>{}), LayoutRight{}),
-        make_layout(make_shape(_1{}, _4{}))));
+    using EpilogR2GCopy =
+        decltype(make_tiled_copy(EpilogS2RCopyAtom{},
+                                 make_layout(make_shape(_4{}, make_shape(_2{}, Int<kThread / 8>{})),
+                                             make_stride(_2{}, make_stride(_1{}, _8{}))),
+                                 make_layout(make_shape(_1{}, make_shape(_4{}, _1{})))));
 };
 
 template <int M, int N, int K> struct SwizzleAtom {
@@ -94,4 +101,5 @@ template <int M, int N, int K> struct SwizzleAtom {
     constexpr static int AB_Swizzle_M = 7; // 2^7 = 128 uint1b(16B)
     constexpr static int AB_Swizzle_S = 3; // 2^3 = 8 bank(16B per bank)
     using AB_Swizzle = Swizzle<AB_Swizzle_B, AB_Swizzle_M, AB_Swizzle_S>;
+
 };

@@ -28,4 +28,7 @@ AQ_INSTANTIATE_FUN(AqCute, 2, 2, true, 4, 64, 128, 1, 2, 1, 8, 8, 128, 3);
 AQ_INSTANTIATE_FUN(AqCute, 2, 2, true, 4, 64, 128, 1, 2, 1, 8, 8, 128, 4);
 // cta<4,64,128>  warp layout<1,2,1> mma<8,8,128>  stage5
 AQ_INSTANTIATE_FUN(AqCute, 2, 2, true, 4, 64, 128, 1, 2, 1, 8, 8, 128, 5);
+
+// cta<4,64,128>  warp layout<1,4,1> mma<8,8,128>  stage2
+AQ_INSTANTIATE_FUN(AqCute, 2, 2, true, 4, 64, 128, 1, 4, 1, 8, 8, 128, 2);
 #endif
