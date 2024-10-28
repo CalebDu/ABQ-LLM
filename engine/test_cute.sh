@@ -14,7 +14,7 @@ K=4096
 #     ./bin/test_any_wmma ${M} ${N} ${K} $b $b 1 > ./results/${M}x${N}x${K}_w${b}a${b}.txt
 # done
 
-./bin/test_any_cute ${M} ${N} ${K} 2 2 1 > ./results/${M}x${N}x${K}_w2a2.txt
+./bin/test_any_cute ${M} ${N} ${K} 2 2 1 > ./results/cute_${M}x${N}x${K}_w2a2.txt
 
 # ./bin/test_any_wmma ${M} ${N} ${K} 6 2 1 > ./results/${M}x${N}x${K}_w2a6.txt
 # ./bin/test_any_wmma ${M} ${N} ${K} 8 2 1 > ./results/${M}x${N}x${K}_w2a8.txt
