@@ -102,7 +102,12 @@ int main(int argc, char **argv)
     }
     int repeat = 1000;
     int warmup = 10;
-
+    if (argc > 7) {
+        repeat = atoi(argv[7]);
+    }
+    if (argc > 8) {
+        warmup = atoi(argv[8]);
+    }
     cudaStream_t stream;
     cudaStreamCreate(&stream);
 

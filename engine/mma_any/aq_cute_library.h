@@ -2,5 +2,9 @@
 #include "aq_cute_op.h"
 #include "common/base.h"
 #include "aq_cute_impl/aq_cute_w2a2.h"
+#include "aq_cute_impl/aq_cute_w3a3.h"
+#include "aq_cute_impl/aq_cute_w4a4.h"
+#include "aq_cute_impl/aq_cute_w5a5.h"
+#include "aq_cute_impl/aq_cute_w2a8.h"
 
 

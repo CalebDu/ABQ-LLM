@@ -70,10 +70,6 @@ struct AqCuteKernel {
     static constexpr int BLOCK_N = ThreadBlockShape::N;
     static constexpr int BLOCK_K = ThreadBlockShape::K;
 
-    static constexpr int MainLoop_BLOCK_M = BLOCK_M * X_BITS;
-    static constexpr int MainLoop_BLOCK_N = BLOCK_N * W_BITS;
-    static constexpr int MainLoop_BLOCK_K = BLOCK_K;
-
     static constexpr int MMA_M = MmaShape::M;
     static constexpr int MMA_N = MmaShape::N;
     static constexpr int MMA_K = MmaShape::K;
@@ -82,20 +78,24 @@ struct AqCuteKernel {
     static constexpr int Warp_N = WarpLayout::N;
     static constexpr int Warp_K = WarpLayout::K;
 
+    static constexpr int MainLoop_BLOCK_M = round_up(BLOCK_M * X_BITS, MMA_N *Warp_M);
+    static constexpr int MainLoop_BLOCK_N = round_up(BLOCK_N * W_BITS, MMA_N *Warp_N);
+    static constexpr int MainLoop_BLOCK_K = BLOCK_K;
+
     static constexpr int kStage = kThreadBlockStage;
     static constexpr bool quant_signed = QuantType::SIGNED;
     static_assert(kThreadBlockStage > 1, "kThreadBlockStage must be greater than 1.\n");
 
     // shape check
     static_assert(Warp_K == 1, "only support warp layout k == 1");
-    static_assert(MainLoop_BLOCK_M % (MMA_N * Warp_M) == 0,
-                  "BLOCK_M must be divisible by (mma op m * warp layout m)");
+    // static_assert(MainLoop_BLOCK_M % (MMA_N * Warp_M) == 0,
+    //               "BLOCK_M must be divisible by (mma op m * warp layout m)");
     static_assert(MainLoop_BLOCK_N % (MMA_N * Warp_N) == 0,
                   "BLOCK_N must be divisible by (mma op n * warp layout n)");
     static_assert(MainLoop_BLOCK_K % (MMA_K * Warp_K) == 0,
                   "BLOCK_K must be divisible by (mma op k * warp layout k)");
-
-    static_assert(BLOCK_M % 4 == 0, "BLOCK_M must be divisible by 4");
+    static_assert(BLOCK_N >= 32, "BLOCK_N must be greater than 32 for bank conflict free");
+    // static_assert(BLOCK_M % 4 == 0, "BLOCK_M must be divisible by 4");
     static_assert(BLOCK_N % 8 == 0, "BLOCK_N must be divisible by 8");
     // --- TiledMMA ---
     using mma_atom = typename AqCuteMmaAtom<MmaShape>::mma_atom;
@@ -140,11 +140,21 @@ struct AqCuteKernel {
     // using SmemCLayoutAtom = decltype(make_layout(
     //     make_shape(make_shape(_4{}, Int<BLOCK_M / 4>{}), make_shape(_8{}, Int<BLOCK_N / 8>{})),
     //     make_stride(make_stride(_8{}, Int<32 * BLOCK_N / 8>{}), make_stride(_1{}, _32{}))));
+
+    /* deprecated SmemCLayout
     using SmemCLayout = decltype(make_layout(
-        make_shape(make_shape(_4{}, Int<BLOCK_M / 4>{}, Int<X_BITS>{}),
-                   make_shape(_8{}, Int<BLOCK_N / 8>{}, Int<W_BITS>{})),
-        make_stride(make_stride(_8{}, Int<4 * BLOCK_N>{}, Int<BLOCK_M * BLOCK_N * W_BITS>{}),
-                    make_stride(_1{}, _32{}, Int<BLOCK_M * BLOCK_N>{}))));
+    make_shape(make_shape(_4{}, Int<BLOCK_M / 4>{}, Int<X_BITS>{}),
+                make_shape(_8{}, Int<BLOCK_N / 8>{}, Int<W_BITS>{})),
+    make_stride(make_stride(_8{}, Int<4 * BLOCK_N>{}, Int<BLOCK_M * BLOCK_N * W_BITS>{}),
+                make_stride(_1{}, _32{}, Int<BLOCK_M * BLOCK_N>{}))));
+    */
+    static constexpr int SmemCLayoutSkew = 8;
+    using SmemCLayout =
+        decltype(make_layout(make_shape(Int<MainLoop_BLOCK_M>{}, Int<MainLoop_BLOCK_N>{}),
+                             make_stride(Int<MainLoop_BLOCK_N + SmemCLayoutSkew>{}, _1{})));
+    using SmemEpilogLayout =
+        decltype(make_layout(make_shape(Int<BLOCK_M * X_BITS>{}, Int<BLOCK_N * W_BITS>{}),
+                             make_stride(Int<MainLoop_BLOCK_N + SmemCLayoutSkew>{}, _1{})));
 
     static constexpr size_t outputSmemSize = cosize(SmemCLayout{}) * sizeof(acc_type);
     // total Smem usage = max(ASmemSize + BSmemSize, CSmemSize)
@@ -247,8 +257,8 @@ AqCuteKernel<QuantType, ThreadBlockShape, WarpLayout, MmaShape, kThreadBlockStag
     // tiled mma
     TiledMMA mma;
     auto thr_mma = mma.get_slice(tidx);
-    auto tArA_mma = thr_mma.partition_fragment_A(gA(_, _, 0)); // [a_mma_frag_size, mma_m, mma_k]
-    auto tBrB_mma = thr_mma.partition_fragment_B(gB(_, _, 0)); // [b_mma_frag_size, mma_n, mma_k]
+    auto tArA_mma = thr_mma.partition_fragment_A(sA(_, _, 0)); // [a_mma_frag_size, mma_m, mma_k]
+    auto tBrB_mma = thr_mma.partition_fragment_B(sB(_, _, 0)); // [b_mma_frag_size, mma_n, mma_k]
     auto tCrC_mma = thr_mma.partition_fragment_C(sC); // [c_mma_frag_size, mma_m, mma_n]
     // set acc zero
     clear(tCrC_mma);
@@ -358,7 +368,7 @@ AqCuteKernel<QuantType, ThreadBlockShape, WarpLayout, MmaShape, kThreadBlockStag
             copy_strip_zfill(a_g2s_copy, tAgA_g2s_copy_pred(_, _, _, i_stage),
                              tAgA_g2s_copy(_, _, _, i_stage), tAsA_g2s_copy(_, _, _, i_stage),
                              a_tile_bound, shape(A_tensor));
-            __syncwarp(); // reduce random store bank conflict 
+            __syncwarp(); // reduce random store bank conflict
             copy_strip_zfill(b_g2s_copy, tBgB_g2s_copy_pred(_, _, _, i_stage),
                              tBgB_g2s_copy(_, _, _, i_stage), tBsB_g2s_copy(_, _, _, i_stage),
                              b_tile_bound, shape(B_tensor));
@@ -434,7 +444,7 @@ AqCuteKernel<QuantType, ThreadBlockShape, WarpLayout, MmaShape, kThreadBlockStag
         }
     }
 
-    copy(c_r2s_copy, tCrC_r2s_copy, tCsS_r2s_copy); 
+    copy(c_r2s_copy, tCrC_r2s_copy, tCsS_r2s_copy);
     __syncthreads();
 
 #if 0 // check mainloop result
@@ -508,7 +518,7 @@ AqCuteKernel<QuantType, ThreadBlockShape, WarpLayout, MmaShape, kThreadBlockStag
                               make_coord(bidx_m, bidx_n)); //[block_m, block_n]
 
     auto sC = make_tensor(make_smem_ptr<acc_type>(shared_mem_workspace),
-                          SmemCLayout{}); // [P * block_m, Q * block_n]
+                          SmemEpilogLayout{}); // [P * block_m, Q * block_n]
     auto sC_pred = make_identity_tensor(shape(sC));
 
     auto sC_tiled = local_tile(sC, make_tile(Int<BLOCK_M>{}, Int<BLOCK_N>{}),
@@ -516,7 +526,13 @@ AqCuteKernel<QuantType, ThreadBlockShape, WarpLayout, MmaShape, kThreadBlockStag
 
     auto sC_tiled_pred = local_tile(sC_pred, make_tile(Int<BLOCK_M>{}, Int<BLOCK_N>{}),
                                     make_coord(_, _)); // [block_m, block_n, P, Q]
-
+#if 0 // check mainloop result
+    if (thread(tid)) {
+        print("\nsC\n");
+        print_tensor(sC);
+    }
+    __syncthreads();
+#endif
     // Epilog s2r copy
     EpilogS2RCopy c_s2r_copy;
     auto c_thr_s2r_copy = c_s2r_copy.get_slice(tidx);
@@ -535,34 +551,37 @@ AqCuteKernel<QuantType, ThreadBlockShape, WarpLayout, MmaShape, kThreadBlockStag
     auto tCgC_r2g_copy_pred = c_thr_r2g_copy.partition_D(gD_pred);
 
 #if 0 // print for debug
-    if (thread(tid)) {
-        print("\nc_s2r_copy\n");
-        print(c_s2r_copy);
-        print("\nc_r2g_copy\n");
-        print(c_r2g_copy);
-        print("\nsC\n");
-        print(sC);
-        print("\nsC_pre\n");
-        print(sC_pred);
-        print("\nsC_tiled\n");
-        print(sC_tiled);
-        print("\ntCsC_s2r_copy\n");
-        print(tCsC_s2r_copy);
-        print("\ntCsC_s2r_copy_pred\n");
-        print(tCsC_s2r_copy_pred);
-        print("\ntCrC_s2r_copy\n");
-        print(tCrC_s2r_copy);
-        print("\ntCrC_r2g_copy\n");
-        print(tCrC_r2g_copy);
-        print("\ntCgC_r2g_copy\n");
-        print(tCgC_r2g_copy);
-        print("\ntCgC_r2g_copy_pred\n");
-        print(tCgC_r2g_copy_pred);
-    }
+        if (thread(tid)) {
+            print("\nc_s2r_copy\n");
+            print(c_s2r_copy);
+            print("\nc_r2g_copy\n");
+            print(c_r2g_copy);
+            print("\nsC\n");
+            print(sC);
+            print("\nsC_pre\n");
+            print(sC_pred);
+            print("\nsC_tiled\n");
+            print(sC_tiled);
+            print("\ntCsC_s2r_copy\n");
+            print(tCsC_s2r_copy);
+            print("\ntCsC_s2r_copy_pred\n");
+            print(tCsC_s2r_copy_pred);
+            print("\ntCrC_s2r_copy\n");
+            print(tCrC_s2r_copy);
+            print("\ntCrC_r2g_copy\n");
+            print(tCrC_r2g_copy);
+            print("\ntCgC_r2g_copy\n");
+            print(tCgC_r2g_copy);
+            print("\ntCgC_r2g_copy_pred\n");
+            print(tCgC_r2g_copy_pred);
+        }
 #endif
     // epilogue
+    /* deprecated epilog bound
     auto epilog_bound = make_tuple(make_tuple(Int<4>{}, Int<BLOCK_M / 4>{}, _1{}),
-                                   make_tuple(Int<8>{}, Int<BLOCK_N / 8>{}, _1{}));
+                                make_tuple(Int<8>{}, Int<BLOCK_N / 8>{}, _1{}));
+    */
+    auto epilog_bound = make_tuple(Int<BLOCK_M>{}, Int<BLOCK_N>{});
     // if (thread(tid)) {
     //     print("\nepilog\n");
     //     print(epilog_bound);

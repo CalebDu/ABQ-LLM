@@ -161,10 +161,10 @@ int main(int argc, char **argv)
         break;
     case 3:
         switch (w_bits) {
-        // case 3:
-        //     test_cute_w3a3(x_bits, w_bits, d_x, d_w, d_x_pack, d_w_pack, m, n, k, d_out, h_out,
-        //                   h_ref_out, warmup, repeat, quant_sign, stream);
-        //     break;
+        case 3:
+            test_cute_w3a3(x_bits, w_bits, d_x, d_w, d_x_pack, d_w_pack, m, n, k, d_out, h_out,
+                          h_ref_out, warmup, repeat, quant_sign, stream);
+            break;
         default:
             printf("unsupport w%da%d\n", w_bits, x_bits);
         }
@@ -175,20 +175,20 @@ int main(int argc, char **argv)
         //     test_cute_w2a4(x_bits, w_bits, d_x, d_w, d_x_pack, d_w_pack, m, n, k, d_out, h_out,
         //                   h_ref_out, warmup, repeat, quant_sign, stream);
         //     break;
-        // case 4:
-        //     test_cute_w4a4(x_bits, w_bits, d_x, d_w, d_x_pack, d_w_pack, m, n, k, d_out, h_out,
-        //                   h_ref_out, warmup, repeat, quant_sign, stream);
-        //     break;
+        case 4:
+            test_cute_w4a4(x_bits, w_bits, d_x, d_w, d_x_pack, d_w_pack, m, n, k, d_out, h_out,
+                          h_ref_out, warmup, repeat, quant_sign, stream);
+            break;
         default:
             printf("unsupport w%da%d\n", w_bits, x_bits);
         }
         break;
     case 5:
         switch (w_bits) {
-        // case 5:
-        //     test_cute_w5a5(x_bits, w_bits, d_x, d_w, d_x_pack, d_w_pack, m, n, k, d_out, h_out,
-        //                   h_ref_out, warmup, repeat, quant_sign, stream);
-        //     break;
+        case 5:
+            test_cute_w5a5(x_bits, w_bits, d_x, d_w, d_x_pack, d_w_pack, m, n, k, d_out, h_out,
+                          h_ref_out, warmup, repeat, quant_sign, stream);
+            break;
         default:
             printf("unsupport w%da%d\n", w_bits, x_bits);
         }
@@ -220,10 +220,10 @@ int main(int argc, char **argv)
         break;
     case 8:
         switch (w_bits) {
-            // case 2:
-            //     test_cute_w2a8(x_bits, w_bits, d_x, d_w, d_x_pack, d_w_pack, m, n, k, d_out, h_out,
-            //                   h_ref_out, warmup, repeat, quant_sign, stream);
-            //     break;
+            case 2:
+                test_cute_w2a8(x_bits, w_bits, d_x, d_w, d_x_pack, d_w_pack, m, n, k, d_out, h_out,
+                              h_ref_out, warmup, repeat, quant_sign, stream);
+                break;
             // case 3:
             //     test_cute_w3a8(x_bits, w_bits, d_x, d_w, d_x_pack, d_w_pack, m, n, k, d_out, h_out,
             //                   h_ref_out, warmup, repeat, quant_sign, stream);
