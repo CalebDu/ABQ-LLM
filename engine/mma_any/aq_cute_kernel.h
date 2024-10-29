@@ -368,11 +368,11 @@ AqCuteKernel<QuantType, ThreadBlockShape, WarpLayout, MmaShape, kThreadBlockStag
             copy_strip_zfill(a_g2s_copy, tAgA_g2s_copy_pred(_, _, _, i_stage),
                              tAgA_g2s_copy(_, _, _, i_stage), tAsA_g2s_copy(_, _, _, i_stage),
                              a_tile_bound, shape(A_tensor));
-            __syncwarp(); // reduce random store bank conflict
+            // __syncwarp(); // reduce random store bank conflict
             copy_strip_zfill(b_g2s_copy, tBgB_g2s_copy_pred(_, _, _, i_stage),
                              tBgB_g2s_copy(_, _, _, i_stage), tBsB_g2s_copy(_, _, _, i_stage),
                              b_tile_bound, shape(B_tensor));
-            __syncwarp();
+            // __syncwarp();
         }
         g2s_g_read_cnt++;
         g2s_s_write_cnt++;
@@ -398,7 +398,6 @@ AqCuteKernel<QuantType, ThreadBlockShape, WarpLayout, MmaShape, kThreadBlockStag
         copy(b_s2r_copy, tBsB_s2r_copy(_, _, 0, s2r_s_read_cnt), tBrB_s2r_copy(_, _, 0));
     }
 
-#pragma unroll
     for (int k_main_loop_idx = 0; k_main_loop_idx < k_main_loop_cnt; k_main_loop_idx++) {
 #pragma unroll
         for (int k_inner_loop_idx = 0; k_inner_loop_idx < k_inner_loop_cnt; k_inner_loop_idx++) {
@@ -427,12 +426,12 @@ AqCuteKernel<QuantType, ThreadBlockShape, WarpLayout, MmaShape, kThreadBlockStag
                                      tAgA_g2s_copy(_, _, _, g2s_g_read_cnt),
                                      tAsA_g2s_copy(_, _, _, g2s_s_write_cnt), a_tile_bound,
                                      shape(A_tensor));
-                    __syncwarp();
+                    // __syncwarp();
                     copy_strip_zfill(b_g2s_copy, tBgB_g2s_copy_pred(_, _, _, g2s_g_read_cnt),
                                      tBgB_g2s_copy(_, _, _, g2s_g_read_cnt),
                                      tBsB_g2s_copy(_, _, _, g2s_s_write_cnt), b_tile_bound,
                                      shape(B_tensor));
-                    __syncwarp();
+                    // __syncwarp();
                 }
                 g2s_g_read_cnt++;
                 g2s_s_write_cnt = s2r_s_read_cnt;

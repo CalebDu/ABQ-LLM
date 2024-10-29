@@ -36,9 +36,7 @@ struct AqCuteCopy {
     using G2SCopyAtom = Copy_Atom<G2SCopyTraits, type>;
 
     static constexpr int G2SCopy_thread_k =
-        (ThreadBlockShape::K / 128 == 1) ?
-            1 :
-            ROUND_UP(ThreadBlockShape::K / 128, 2); // 128 uint1b_t(int128_t) per thread
+        ROUND_UP(ThreadBlockShape::K / 128, 2); // 128 uint1b_t(int128_t) per thread
 
     static constexpr int G2SCopy_thread_m = kThread / G2SCopy_thread_k;
     static constexpr int G2SCopy_thread_n = kThread / G2SCopy_thread_k;
