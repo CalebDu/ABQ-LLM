@@ -6,11 +6,11 @@
 #include "mma_any/aq_cute_op.h"
 #include "test/test_cute/test_cute.h"
 
-void test_cute_w5a5(int x_bits, int w_bits, int *d_x, int *d_w, int *d_x_pack, int *d_w_pack, int m,
+void test_cute_w7a7(int x_bits, int w_bits, int *d_x, int *d_w, int *d_x_pack, int *d_w_pack, int m,
                     int n, int k, int *d_out, int *h_out, int *h_ref_out, int warmup, int repeat,
                     bool quant_sign, cudaStream_t stream)
 {
-#ifdef W5A5
+#ifdef W7A7
     std::string config_str;
     std::stringstream s;
     s << "X_BITS:" << x_bits << " W_BITS:" << w_bits << " M:" << m << " N:" << n << " K:" << k
@@ -32,15 +32,13 @@ void test_cute_w5a5(int x_bits, int w_bits, int *d_x, int *d_w, int *d_x_pack, i
     std::stringstream best_config;
 
     if (quant_sign) {
-        // W5A5 int
+        // W7A7 int
 
-        // cta<2,64,1024>  warp layout<1,4,1> mma<8,8,128>
-        TEST(5, 5, true, 1, 64, 1024, 1, 4, 1, 8, 8, 128, 2);
-        TEST(5, 5, true, 1, 64, 512, 1, 4, 1, 8, 8, 128, 4);
+        TEST(7, 7, true, 1, 64, 512, 1, 4, 1, 8, 8, 128, 3);
 
-        TEST(5, 5, true, 1, 32, 512, 1, 4, 1, 8, 8, 128, 4);
-        TEST(5, 5, true, 1, 32, 512, 1, 4, 1, 8, 8, 128, 8);
-        TEST(5, 5, true, 1, 32, 1024, 1, 4, 1, 8, 8, 128, 4);
+        TEST(7, 7, true, 1, 32, 512, 1, 4, 1, 8, 8, 128, 6);
+        TEST(7, 7, true, 1, 32, 1024, 1, 4, 1, 8, 8, 128, 3);
+        TEST(7, 7, true, 1, 32, 512, 1, 4, 1, 8, 8, 128, 3);
     } else {
     }
 

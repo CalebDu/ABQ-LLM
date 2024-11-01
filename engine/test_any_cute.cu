@@ -199,20 +199,20 @@ int main(int argc, char **argv)
         //     test_cute_w2a6(x_bits, w_bits, d_x, d_w, d_x_pack, d_w_pack, m, n, k, d_out, h_out,
         //                   h_ref_out, warmup, repeat, quant_sign, stream);
         //     break;
-        // case 6:
-        //     test_cute_w6a6(x_bits, w_bits, d_x, d_w, d_x_pack, d_w_pack, m, n, k, d_out, h_out,
-        //                   h_ref_out, warmup, repeat, quant_sign, stream);
-        //     break;
+        case 6:
+            test_cute_w6a6(x_bits, w_bits, d_x, d_w, d_x_pack, d_w_pack, m, n, k, d_out, h_out,
+                          h_ref_out, warmup, repeat, quant_sign, stream);
+            break;
         default:
             printf("unsupport w%da%d\n", w_bits, x_bits);
         }
         break;
     case 7:
         switch (w_bits) {
-            // case 7:
-            //     test_cute_w7a7(x_bits, w_bits, d_x, d_w, d_x_pack, d_w_pack, m, n, k, d_out, h_out,
-            //                   h_ref_out, warmup, repeat, quant_sign, stream);
-            //     break;
+            case 7:
+                test_cute_w7a7(x_bits, w_bits, d_x, d_w, d_x_pack, d_w_pack, m, n, k, d_out, h_out,
+                              h_ref_out, warmup, repeat, quant_sign, stream);
+                break;
 
         default:
             printf("unsupport w%da%d\n", w_bits, x_bits);

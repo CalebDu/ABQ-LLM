@@ -5,6 +5,6 @@
 #include "aq_cute_impl/aq_cute_w3a3.h"
 #include "aq_cute_impl/aq_cute_w4a4.h"
 #include "aq_cute_impl/aq_cute_w5a5.h"
+#include "aq_cute_impl/aq_cute_w6a6.h"
+#include "aq_cute_impl/aq_cute_w7a7.h"
 #include "aq_cute_impl/aq_cute_w2a8.h"
-
-

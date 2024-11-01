@@ -19,7 +19,5 @@ K=4096
 ./bin/test_any_cute ${M} ${N} ${K} 3 3 1 > ./results/cute_${M}x${N}x${K}_w3a3.txt
 ./bin/test_any_cute ${M} ${N} ${K} 4 4 1 > ./results/cute_${M}x${N}x${K}_w4a4.txt
 ./bin/test_any_cute ${M} ${N} ${K} 5 5 1 > ./results/cute_${M}x${N}x${K}_w5a5.txt
-# ./bin/test_any_wmma ${M} ${N} ${K} 6 2 1 > ./results/${M}x${N}x${K}_w2a6.txt
-# ./bin/test_any_wmma ${M} ${N} ${K} 8 2 1 > ./results/${M}x${N}x${K}_w2a8.txt
-# ./bin/test_any_wmma ${M} ${N} ${K} 8 3 1 > ./results/${M}x${N}x${K}_w3a8.txt
-# ./bin/test_any_wmma ${M} ${N} ${K} 8 4 1 > ./results/${M}x${N}x${K}_w4a8.txt
+./bin/test_any_cute ${M} ${N} ${K} 6 6 1 > ./results/cute_${M}x${N}x${K}_w6a6.txt
+./bin/test_any_cute ${M} ${N} ${K} 7 7 1 > ./results/cute_${M}x${N}x${K}_w7a7.txt
